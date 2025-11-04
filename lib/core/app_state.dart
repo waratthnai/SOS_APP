@@ -938,6 +938,10 @@ void addChatVideo(String path) {
   // 🌐 Mesh Network: เก็บ ID ข้อความที่เคยส่งต่อแล้ว (ป้องกันการส่งซ้ำ)
   final Set<String> _forwardedMessages = {};
   final Map<String, int> _messageTTL = {}; // Time To Live สำหรับแต่ละข้อความ
+  final Map<String, DateTime> _messageTimestamps = {}; // เก็บเวลาที่รับข้อความ
+  
+  // 📊 Network Topology: เก็บข้อมูลเครือข่าย
+  final Map<String, Set<String>> _networkTopology = {}; // peerId -> connected peers
   
   // Getters สำหรับ UI
   bool isRescuePeer(String peerId) => _rescuePeers[peerId] ?? false;
@@ -1044,16 +1048,24 @@ void addChatVideo(String path) {
     if (newTTL > 0 && _peers.isNotEmpty) {
       final relayMsg = 'RELAY:$messageId:$newTTL:$originalSender:$senderName:$content';
       
+      // บันทึก network topology
+      _networkTopology[fromPeerId] = _peers.map((p) => p.id).toSet();
+      _messageTimestamps[messageId] = DateTime.now();
+      
       for (final peer in _peers) {
         if (peer.id != fromPeerId && peer.id != originalSender) {
           try {
-            await transport.sendMessage(relayMsg);
+            // 🔧 FIX: ต้องระบุ to: peer เพื่อส่งถึงเป้าหมายเฉพาะ
+            await transport.sendMessage(relayMsg, to: peer);
             debugPrint('📡 ส่งต่อไปยัง ${peer.name} (TTL=$newTTL)');
           } catch (e) {
             debugPrint('❌ ส่งต่อไปยัง ${peer.name} ล้มเหลว: $e');
           }
         }
       }
+      
+      // ล้างข้อความเก่า (เก็บไว้แค่ 100 ข้อความล่าสุด)
+      _cleanupOldMessages();
     }
 
     // แสดง notification
@@ -1061,6 +1073,44 @@ void addChatVideo(String path) {
       '📡 Mesh จาก $senderName',
       content,
     );
+  }
+  
+  // 🧹 ล้างข้อความเก่าเพื่อป้องกัน memory leak
+  void _cleanupOldMessages() {
+    const maxMessages = 100;
+    
+    if (_forwardedMessages.length > maxMessages) {
+      // เก็บแค่ข้อความล่าสุด
+      final sortedMessages = _messageTimestamps.entries.toList()
+        ..sort((a, b) => b.value.compareTo(a.value));
+      
+      final toRemove = sortedMessages.skip(maxMessages).map((e) => e.key).toList();
+      
+      for (final msgId in toRemove) {
+        _forwardedMessages.remove(msgId);
+        _messageTTL.remove(msgId);
+        _messageTimestamps.remove(msgId);
+      }
+      
+      debugPrint('🧹 ล้างข้อความเก่า: ${toRemove.length} ข้อความ (เหลือ ${_forwardedMessages.length})');
+    }
+  }
+  
+  // 📊 ดึงข้อมูล Network Topology
+  Map<String, Set<String>> get networkTopology => Map.unmodifiable(_networkTopology);
+  
+  // 📊 สถิติ Mesh Network
+  Map<String, dynamic> getMeshNetworkStats() {
+    return {
+      'totalForwardedMessages': _forwardedMessages.length,
+      'averageTTL': _messageTTL.values.isEmpty 
+          ? 0 
+          : _messageTTL.values.reduce((a, b) => a + b) / _messageTTL.length,
+      'networkNodes': _networkTopology.length,
+      'oldestMessage': _messageTimestamps.values.isEmpty
+          ? null
+          : _messageTimestamps.values.reduce((a, b) => a.isBefore(b) ? a : b),
+    };
   }
 
   /// เริ่มอัปเดตสถานะออนไลน์แบบอัตโนมัติ (ทุก 5 วินาที)
