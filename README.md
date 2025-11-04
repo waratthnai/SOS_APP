@@ -1,15 +1,35 @@
-# offgrid_sos
+# SOS_APP (OffGrid SOS)
 
-A new Flutter project.
+An emergency communication Flutter application that works offline using WiFi Direct, Bluetooth, and Firebase Cloud Messaging.
+
+## Features
+
+- 🆘 Emergency SOS alerts with location sharing
+- 💬 Offline peer-to-peer messaging (WiFi Direct & Bluetooth)
+- 👥 Friends system with friend requests
+- 📍 Real-time location tracking on maps
+- 🔔 Push notifications via Firebase
+- 🎨 Modern neon-themed UI
+- 📱 Cross-platform support (Android, iOS, Web)
 
 ## Getting Started
 
-This project is a starting point for a Flutter application.
+This is a Flutter application with Firebase integration for emergency communication.
 
-A few resources to get you started if this is your first Flutter project:
+### Prerequisites
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+- Flutter SDK (latest stable version)
+- Android Studio / Xcode for mobile development
+- Firebase account and project setup
+
+### Installation
+
+1. Clone this repository
+2. Run `flutter pub get` to install dependencies
+3. Configure Firebase:
+   - Add your `google-services.json` for Android
+   - Add your `GoogleService-Info.plist` for iOS
+4. Run `flutter run` to start the app
 
 For help getting started with Flutter development, view the
 [online documentation](https://docs.flutter.dev/), which offers tutorials,
