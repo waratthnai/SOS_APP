@@ -320,12 +320,12 @@ class _RootNavState extends State<RootNav> {
     // ส่งข้อความ SOS ไปยังอุปกรณ์ใกล้เคียง
     await appState.send(message);
     
-    // 🚨 ส่ง SOS Status เพื่อให้อุปกรณ์อื่นแสดง Badge สีแดง
-    final deviceName = appState.deviceName;
-    final sosStatus = latitude != null && longitude != null
-        ? 'SOS_STATUS:$deviceName:SOS_ACTIVE:$latitude:$longitude'
-        : 'SOS_STATUS:$deviceName:SOS_ACTIVE';
-    await appState.transport.sendMessage(sosStatus);
+    // 🚨 เปิดโหมด SOS และ Broadcast สถานะพร้อมพิกัด
+    await appState.broadcastSOSStatus(
+      isActive: true,
+      latitude: latitude != null ? double.parse(latitude) : null,
+      longitude: longitude != null ? double.parse(longitude) : null,
+    );
 
     // บันทึก Log
     debugPrint('🚨 SOS SENT (broadcast) to $connectedCount devices at $now');
@@ -799,6 +799,8 @@ class _HomeScreenState extends State<HomeScreen> {
                               ...peers.take(3).map((p) {
                                 // 🚑 เช็คว่าเป็นหน่วยกู้ภัยหรือไม่
                                 final isRescue = appState.isPeerRescue(p.id);
+                                // 🚨 เช็คว่าเปิด SOS หรือไม่
+                                final isSOS = appState.isSOSPeer(p.id);
 
                                 return Container(
                                   margin: const EdgeInsets.only(bottom: 6),
@@ -807,27 +809,38 @@ class _HomeScreenState extends State<HomeScreen> {
                                     vertical: 6,
                                   ),
                                   decoration: BoxDecoration(
-                                    color: isRescue
-                                        ? Colors.blue.withOpacity(0.15)
-                                        : Colors.blue.withOpacity(0.1),
+                                    color: isSOS
+                                        ? Colors.red.withOpacity(0.15)
+                                        : isRescue
+                                            ? Colors.blue.withOpacity(0.15)
+                                            : Colors.blue.withOpacity(0.1),
                                     borderRadius: BorderRadius.circular(8),
-                                    border: isRescue
+                                    border: isSOS
                                         ? Border.all(
-                                            color: Colors.blue,
+                                            color: Colors.red,
                                             width: 2,
                                           )
-                                        : null,
+                                        : isRescue
+                                            ? Border.all(
+                                                color: Colors.blue,
+                                                width: 2,
+                                              )
+                                            : null,
                                   ),
                                   child: Row(
                                     children: [
-                                      // 🚑 Icon หน่วยกู้ภัย หรือ icon ปกติ
+                                      // 🚨 Icon SOS / 🚑 Icon หน่วยกู้ภัย / icon ปกติ
                                       Icon(
-                                        isRescue
-                                            ? Icons.local_hospital
-                                            : Icons.device_hub,
-                                        color: isRescue
-                                            ? Colors.blue
-                                            : Colors.blue,
+                                        isSOS
+                                            ? Icons.warning_amber_rounded
+                                            : isRescue
+                                                ? Icons.local_hospital
+                                                : Icons.device_hub,
+                                        color: isSOS
+                                            ? Colors.red
+                                            : isRescue
+                                                ? Colors.blue
+                                                : Colors.blue,
                                         size: 18,
                                       ),
                                       const SizedBox(width: 8),
@@ -847,14 +860,43 @@ class _HomeScreenState extends State<HomeScreen> {
                                                       fontSize: 14,
                                                       fontWeight:
                                                           FontWeight.bold,
-                                                      color: isRescue
-                                                          ? Colors.blue
-                                                          : Colors.black,
+                                                      color: isSOS
+                                                          ? Colors.red
+                                                          : isRescue
+                                                              ? Colors.blue
+                                                              : Colors.black,
                                                     ),
                                                   ),
                                                 ),
+                                                // 🚨 Badge SOS สีแดง
+                                                if (isSOS) ...[
+                                                  const SizedBox(width: 4),
+                                                  Container(
+                                                    padding:
+                                                        const EdgeInsets.symmetric(
+                                                          horizontal: 6,
+                                                          vertical: 2,
+                                                        ),
+                                                    decoration: BoxDecoration(
+                                                      color: Colors.red,
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                            12,
+                                                          ),
+                                                    ),
+                                                    child: const Text(
+                                                      '🚨 SOS',
+                                                      style: TextStyle(
+                                                        fontSize: 10,
+                                                        color: Colors.white,
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ],
                                                 // 🚑 Badge หน่วยกู้ภัย
-                                                if (isRescue) ...[
+                                                if (isRescue && !isSOS) ...[
                                                   const SizedBox(width: 4),
                                                   Container(
                                                     padding:

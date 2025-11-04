@@ -32,6 +32,10 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   bool _isRescueMode = false;
   bool get isRescueMode => _isRescueMode;
 
+  // 🚨 โหมด SOS (Emergency SOS Mode)
+  bool _isSOSActive = false;
+  bool get isSOSActive => _isSOSActive;
+
   AppState({required this.transport}) {
     _subs();
     _loadLocalMessages();
@@ -73,6 +77,85 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     final message = 'RESCUE_STATUS:$_deviceName:$status';
     await transport.sendMessage(message);
     debugPrint('📡 Broadcast: $message');
+  }
+
+  // 🚨 เปิด/ปิด โหมด SOS
+  Future<void> toggleSOSMode() async {
+    _isSOSActive = !_isSOSActive;
+    
+    if (_isSOSActive) {
+      // ดึงตำแหน่งปัจจุบัน
+      Position? position = await _getCurrentLocation();
+      
+      // Broadcast SOS พร้อมพิกัด
+      await broadcastSOSStatus(
+        isActive: true,
+        latitude: position?.latitude,
+        longitude: position?.longitude,
+      );
+      
+      debugPrint('🚨 เปิดโหมด SOS');
+    } else {
+      await broadcastSOSStatus(isActive: false);
+      debugPrint('🚨 ปิดโหมด SOS');
+    }
+    
+    notifyListeners();
+  }
+
+  // 🚨 Broadcast สถานะ SOS พร้อมพิกัด GPS
+  Future<void> broadcastSOSStatus({
+    required bool isActive,
+    double? latitude,
+    double? longitude,
+  }) async {
+    final status = isActive ? 'SOS_ACTIVE' : 'SOS_INACTIVE';
+    
+    String message;
+    if (latitude != null && longitude != null) {
+      message = 'SOS_STATUS:$_deviceName:$status:$latitude:$longitude';
+      debugPrint('📡 Broadcast SOS: $message');
+      debugPrint('📍 Location: https://www.google.com/maps?q=$latitude,$longitude');
+    } else {
+      message = 'SOS_STATUS:$_deviceName:$status';
+      debugPrint('📡 Broadcast SOS (no location): $message');
+    }
+    
+    await transport.sendMessage(message);
+  }
+
+  // ดึงตำแหน่งปัจจุบัน
+  Future<Position?> _getCurrentLocation() async {
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        debugPrint('❌ Location services ถูกปิด');
+        return null;
+      }
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          debugPrint('❌ Location permission ถูกปฏิเสธ');
+          return null;
+        }
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        debugPrint('❌ Location permission ถูกปฏิเสธถาวร');
+        return null;
+      }
+
+      Position position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+      
+      return position;
+    } catch (e) {
+      debugPrint('❌ Error getting location: $e');
+      return null;
+    }
   }
 
   void _updateTransportDeviceName() {
