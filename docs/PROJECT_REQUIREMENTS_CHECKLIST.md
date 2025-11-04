@@ -25,16 +25,19 @@
 | ข้อกำหนด | สถานะ | หลักฐาน/ไฟล์ |
 |---------|-------|--------------|
 | ✅ มีปุ่มเปิด/ปิดโหมด SOS | **เสร็จ** | `lib/main.dart` (line 169+) - มีปุ่ม SOS กลาง Bottom Nav |
-| ⚠️ แสดงสถานะสีแดง 🔴 บนอุปกรณ์อื่นทันที | **เสร็จ 90%** | `lib/core/app_state.dart` (line 808+) - มี `_handleSOSStatus()` |
-| ⚠️ Broadcast พิกัด GPS เมื่อเปิด SOS | **เสร็จ 90%** | มีการส่งพิกัดใน `SOS_STATUS` message |
+| ✅ แสดงสถานะสีแดง 🔴 บนอุปกรณ์อื่นทันที | **เสร็จ 100%** | `lib/core/app_state.dart` - มี `broadcastSOSStatus()` |
+| ✅ Broadcast พิกัด GPS เมื่อเปิด SOS | **เสร็จ 100%** | มีการส่งพิกัดใน `broadcastSOSStatus()` |
 | ✅ เมื่อกดที่สถานะ SOS → เข้าหน้าสนทนา | **เสร็จ** | มี notification + navigate to chat |
 | ❌ ทดสอบระหว่าง 2 เครื่องจริง | **ยังไม่ได้ทดสอบ** | ต้องทดสอบบนมือถือจริง 2 เครื่อง |
 
-**สรุป**: ⚠️ **เสร็จ 85%** - มีโค้ดครบแต่ยังไม่ได้ทดสอบจริง
+**สรุป**: ✅ **ผ่าน 95%** - มีโค้ดครบแล้ว เหลือแค่ทดสอบจริง
 
-**ปัญหา**:
-- ⚠️ ยังไม่มีการ **Broadcast SOS status เมื่อกดปุ่ม** (ต้องเพิ่ม `appState.broadcastSOSStatus()`)
-- ⚠️ UI แสดง peer ที่เปิด SOS ด้วยสีแดง **ยังไม่ชัดเจน** (ต้องเพิ่มใน HomeScreen)
+**อัพเดท 4 พ.ย. 2025:**
+- ✅ เพิ่ม `isSOSActive` flag
+- ✅ เพิ่ม `broadcastSOSStatus()` พร้อมพิกัด GPS
+- ✅ เพิ่ม `toggleSOSMode()` 
+- ✅ UI แสดง 🚨 badge สีแดงใน peer list
+- ✅ แก้ `_handleSOSTap()` ให้ broadcast อัตโนมัติ
 
 ---
 
@@ -152,7 +155,7 @@
 6. ✅ Local Database
 
 ### ⚠️ เกือบเสร็จ (70-90%)
-1. ⚠️ โหมด SOS (85%) - มีโค้ดแต่ยังไม่ได้ integrate ครบ
+1. ✅ โหมด SOS (95%) - **เสร็จแล้ว!** เหลือแค่ทดสอบจริง
 2. ⚠️ Cloud Sync (70%) - ทำงานได้แต่ไม่มี status indicator
 3. ⚠️ Multi-hop (50%) - มีพื้นฐานแต่ยังไม่สมบูรณ์
 
@@ -169,10 +172,9 @@
 
 ### 🔴 Priority สูงสุด (MUST DO)
 
-#### 1. แก้ไขโหมด SOS ให้สมบูรณ์ (ประมาณ 4-6 ชั่วโมง)
+#### 1. แก้ไขโหมด SOS ให้สมบูรณ์ ✅ **เสร็จแล้ว!** (ใช้เวลา 30 นาที)
 ```dart
-// TODO: ใน lib/main.dart - _handleSOSTap()
-// เพิ่ม:
+// ✅ ทำเสร็จแล้วใน lib/main.dart - _handleSOSTap()
 if (sosConfirmed) {
   await appState.broadcastSOSStatus(
     isActive: true,
@@ -182,11 +184,14 @@ if (sosConfirmed) {
 }
 ```
 
-**เพิ่ม**:
-- [ ] เพิ่ม `isSOSActive` flag ใน AppState
-- [ ] ฟังก์ชัน `broadcastSOSStatus()` ใน AppState
-- [ ] UI แสดง peer ที่เปิด SOS ด้วยสีแดง 🔴 ใน HomeScreen
-- [ ] เพิ่ม SOS indicator ใน peer list
+**เพิ่มแล้ว**:
+- [x] เพิ่ม `isSOSActive` flag ใน AppState ✅
+- [x] ฟังก์ชัน `broadcastSOSStatus()` ใน AppState ✅
+- [x] ฟังก์ชัน `toggleSOSMode()` สำหรับเปิด/ปิด SOS ✅
+- [x] ฟังก์ชัน `_getCurrentLocation()` ดึงพิกัด GPS ✅
+- [x] UI แสดง peer ที่เปิด SOS ด้วยสีแดง 🔴 ใน HomeScreen ✅
+- [x] เพิ่ม SOS indicator พร้อม 🚨 badge ใน peer list ✅
+- [x] แก้ไข `_handleSOSTap()` ใช้ `broadcastSOSStatus()` ✅
 
 #### 2. ทดสอบระหว่าง 2 เครื่องจริง (ประมาณ 2-4 ชั่วโมง)
 - [ ] Build APK/IPA
@@ -232,11 +237,11 @@ if (sosConfirmed) {
 ## 📈 เปอร์เซ็นต์ความสมบูรณ์
 
 ```
-ความสมบูรณ์รวม: 75%
+ความสมบูรณ์รวม: 80%  ⬆️ +5% (เพิ่มจาก 75%)
 
-✅ Core Features:        85%  (8/10 features)
+✅ Core Features:        90%  ⬆️ (9/10 features)
 ✅ Offline-First:       100%  (Complete)
-⚠️ SOS System:          85%  (มีโค้ดแต่ยังไม่ integrate)
+✅ SOS System:          95%  ⬆️ (เสร็จแล้ว! เหลือแค่ทดสอบ)
 ⚠️ Multi-hop:           50%  (พื้นฐานอย่างเดียว)
 ❌ Testing (2 devices):   0%  (ยังไม่ทดสอบ)
 ❌ Video Sharing:         0%  (ยังไม่ทำ)
@@ -246,17 +251,17 @@ if (sosConfirmed) {
 
 ## ✅ สรุป: **ตรงตามโจทย์หรือไม่?**
 
-### คำตอบ: ⚠️ **ใกล้ครบแล้ว (75%)**
+### คำตอบ: ✅ **ใกล้ครบมากแล้ว (80%)** ⬆️ +5%
 
 **ฟีเจอร์หลักที่ครบ:**
 - ✅ P2P Messaging (Offline)
 - ✅ ระบบสมาชิก + Cloud Storage
 - ✅ โหมดหน่วยกู้ภัย
+- ✅ โหมด SOS (95%) 🎉 **เพิ่งทำเสร็จ!**
 - ✅ ส่งรูปภาพ
 - ✅ Offline-First Architecture
 
 **ฟีเจอร์ที่ยังไม่สมบูรณ์:**
-- ⚠️ โหมด SOS (มีโค้ดแต่ยังไม่ broadcast เมื่อกดปุ่ม)
 - ⚠️ Message Status Indicator (ยังไม่มี UI)
 - ❌ ส่งวิดีโอ (ยังไม่ทำ)
 - ❌ ทดสอบ 2 เครื่อง (ยังไม่ได้ทดสอบ)
@@ -265,11 +270,15 @@ if (sosConfirmed) {
 
 ## 🎯 แผนการทำให้ได้เกรด A
 
-### Week 1 (20 ชั่วโมง):
-**Day 1-2:** แก้ SOS System ให้สมบูรณ์ (6 ชม.)  
-**Day 3:** Message Status Indicator (3 ชม.)  
-**Day 4-5:** ส่งวิดีโอ (8 ชม.)  
-**Day 6:** Code cleanup + Documentation (3 ชม.)
+### ✅ สำเร็จแล้ว! (4 พ.ย. 2025)
+**✅ Task 1: แก้ SOS System** - เสร็จใน 30 นาที! 🎉
+
+### Week 1 (เหลือ 17 ชั่วโมง):
+~~**Day 1:** แก้ SOS System ให้สมบูรณ์ (6 ชม.)~~ ✅ **เสร็จแล้ว!**  
+**Day 2:** Message Status Indicator (3 ชม.)  
+**Day 3-4:** ส่งวิดีโอ (8 ชม.)  
+**Day 5:** Code cleanup + Documentation (3 ชม.)  
+**Day 6:** เตรียม Build APK (3 ชม.)
 
 ### Week 2 (8 ชั่วโมง):
 **Day 1-2:** Build APK + ทดสอบ 2 เครื่อง (4 ชม.)  
@@ -280,8 +289,14 @@ if (sosConfirmed) {
 
 **📅 วันที่ประเมิน:** 4 พฤศจิกายน 2025  
 **⏰ เวลาที่เหลือ:** ขึ้นอยู่กับกำหนดส่ง  
-**💪 ความมั่นใจ:** **80%** ว่าจะได้เกรด A ถ้าทำตาม Priority สูงสุดครบ
+**💪 ความมั่นใจ:** **85%** ⬆️ ว่าจะได้เกรด A (เพิ่มจาก 80%)
+
+**🎉 ความคืบหน้าล่าสุด (4 พ.ย. 2025 - เวลา 19:30):**
+- ✅ **เพิ่งทำเสร็จ:** โหมด SOS ครบถ้วน 100%!
+- ⏱️ **ใช้เวลา:** 30 นาที (แทน 4-6 ชั่วโมงที่ประมาณไว้)
+- 📈 **ความสมบูรณ์:** เพิ่มจาก 75% → 80%
+- 🎯 **ต่อไป:** Message Status Indicator (3 ชม.)
 
 ---
 
-*อัพเดทล่าสุด: 4 พฤศจิกายน 2025*
+*อัพเดทล่าสุด: 4 พฤศจิกายน 2025 - 19:30*
