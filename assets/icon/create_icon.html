@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SOS App Icon Generator</title>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: #f0f0f0;
+            font-family: Arial, sans-serif;
+            gap: 20px;
+        }
+        .instructions {
+            max-width: 600px;
+            padding: 20px;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .instructions h2 {
+            color: #D32F2F;
+            margin-top: 0;
+        }
+        .instructions ol {
+            line-height: 1.8;
+        }
+        .canvas-container {
+            position: relative;
+        }
+        canvas {
+            border: 2px solid #ddd;
+            border-radius: 10px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+        }
+        .buttons {
+            display: flex;
+            gap: 10px;
+        }
+        button {
+            padding: 12px 24px;
+            font-size: 16px;
+            font-weight: bold;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .download-btn {
+            background: #D32F2F;
+            color: white;
+        }
+        .download-btn:hover {
+            background: #B71C1C;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 10px rgba(211, 47, 47, 0.3);
+        }
+        .foreground-btn {
+            background: #1976D2;
+            color: white;
+        }
+        .foreground-btn:hover {
+            background: #1565C0;
+        }
+    </style>
+</head>
+<body>
+    <div class="instructions">
+        <h2>🎨 วิธีสร้างไอคอน SOS</h2>
+        <ol>
+            <li>คลิกปุ่ม <strong>"Download Main Icon (1024x1024)"</strong> → บันทึกเป็น <code>app_icon.png</code></li>
+            <li>คลิกปุ่ม <strong>"Download Foreground (432x432)"</strong> → บันทึกเป็น <code>app_icon_foreground.png</code></li>
+            <li>วางไฟล์ทั้ง 2 ใน folder: <code>assets/icon/</code></li>
+            <li>รันคำสั่ง: <code>flutter pub get</code></li>
+            <li>รันคำสั่ง: <code>flutter pub run flutter_launcher_icons</code></li>
+            <li>Build ใหม่: <code>flutter build apk --release</code></li>
+        </ol>
+    </div>
+
+    <div class="canvas-container">
+        <canvas id="mainCanvas"></canvas>
+    </div>
+    
+    <div class="buttons">
+        <button class="download-btn" onclick="downloadMainIcon()">
+            📥 Download Main Icon (1024x1024)
+        </button>
+        <button class="foreground-btn" onclick="downloadForegroundIcon()">
+            📥 Download Foreground (432x432)
+        </button>
+    </div>
+
+    <script>
+        // Main Icon (1024x1024)
+        function drawMainIcon() {
+            const canvas = document.getElementById('mainCanvas');
+            const ctx = canvas.getContext('2d');
+            const size = 1024;
+            
+            canvas.width = size;
+            canvas.height = size;
+            
+            // Red circular background with gradient
+            const gradient = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
+            gradient.addColorStop(0, '#E53935');
+            gradient.addColorStop(1, '#C62828');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, size, size);
+            
+            // Draw circle
+            ctx.beginPath();
+            ctx.arc(size/2, size/2, size/2, 0, Math.PI * 2);
+            ctx.fillStyle = gradient;
+            ctx.fill();
+            
+            // Add subtle border
+            ctx.strokeStyle = '#B71C1C';
+            ctx.lineWidth = 8;
+            ctx.stroke();
+            
+            // White SOS text
+            ctx.fillStyle = 'white';
+            ctx.font = 'bold 380px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.shadowColor = 'rgba(0,0,0,0.3)';
+            ctx.shadowBlur = 20;
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 8;
+            ctx.fillText('SOS', size/2, size/2);
+            
+            // Add emergency symbol (small cross above)
+            ctx.shadowBlur = 0;
+            ctx.shadowOffsetY = 0;
+            ctx.font = 'bold 120px Arial';
+            ctx.fillText('⚠', size/2, size/2 - 280);
+        }
+
+        // Foreground Icon for Adaptive Icon (432x432)
+        function drawForegroundIcon() {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            const size = 432; // Android adaptive icon foreground size
+            
+            canvas.width = size;
+            canvas.height = size;
+            
+            // Transparent background
+            ctx.clearRect(0, 0, size, size);
+            
+            // White SOS text (larger for better visibility)
+            ctx.fillStyle = 'white';
+            ctx.font = 'bold 180px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.shadowColor = 'rgba(0,0,0,0.4)';
+            ctx.shadowBlur = 15;
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 5;
+            ctx.fillText('SOS', size/2, size/2 + 10);
+            
+            // Warning symbol
+            ctx.shadowBlur = 10;
+            ctx.font = 'bold 60px Arial';
+            ctx.fillText('⚠', size/2, size/2 - 100);
+            
+            return canvas;
+        }
+
+        function downloadMainIcon() {
+            const canvas = document.getElementById('mainCanvas');
+            const link = document.createElement('a');
+            link.download = 'app_icon.png';
+            link.href = canvas.toDataURL('image/png');
+            link.click();
+        }
+
+        function downloadForegroundIcon() {
+            const canvas = drawForegroundIcon();
+            const link = document.createElement('a');
+            link.download = 'app_icon_foreground.png';
+            link.href = canvas.toDataURL('image/png');
+            link.click();
+        }
+
+        // Draw main icon on load
+        drawMainIcon();
+    </script>
+</body>
+</html>
