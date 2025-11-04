@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "817393750877",
+    "project_id": "offgrid-c8d5d",
+    "storage_bucket": "offgrid-c8d5d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:817393750877:android:cec156b67813117d794eb4",
+        "android_client_info": {
+          "package_name": "com.example.offgrid_sos"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBBh3Th_g4ovnylCL6toBV4PnjGQgVmchw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

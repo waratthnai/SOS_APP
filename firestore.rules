@@ -1,0 +1,72 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ==================== Users Collection ====================
+    // ผู้ใช้สามารถอ่านและเขียนโปรไฟล์ของตัวเองได้
+    // ผู้ใช้ที่ login แล้วสามารถอ่านโปรไฟล์คนอื่นได้ (เพื่อค้นหาเพื่อน)
+    match /users/{userId} {
+      // อนุญาตให้อ่านถ้า login แล้ว (สำหรับการค้นหาเพื่อน)
+      allow read: if request.auth != null;
+      
+      // อนุญาตให้เขียนได้เฉพาะโปรไฟล์ของตัวเอง
+      allow write: if request.auth != null && request.auth.uid == userId;
+      
+      // ==================== Friends Sub-collection ====================
+      // เพื่อนของแต่ละ user
+      match /friends/{friendId} {
+        // อนุญาตให้อ่านถ้าเป็นเจ้าของ user นั้นๆ
+        allow read: if request.auth != null && request.auth.uid == userId;
+        
+        // อนุญาตให้เขียนถ้าเป็นเจ้าของ user นั้นๆ
+        allow write: if request.auth != null && request.auth.uid == userId;
+      }
+      
+      // ==================== Chat Messages Sub-collection ====================
+      // ข้อความแชทระหว่างผู้ใช้
+      match /chat_messages/{messageId} {
+        // อนุญาตให้อ่านถ้าเป็นเจ้าของ user นั้นๆ
+        allow read: if request.auth != null && request.auth.uid == userId;
+        
+        // อนุญาตให้เขียนถ้าเป็นเจ้าของ user นั้นๆ หรือเป็นคนส่งข้อความ
+        allow write: if request.auth != null && 
+                       (request.auth.uid == userId || 
+                        request.auth.uid == request.resource.data.fromUserId);
+      }
+    }
+    
+    // ==================== Friend Requests Collection ====================
+    // คำขอเป็นเพื่อน
+    match /friend_requests/{requestId} {
+      // อนุญาตให้อ่านถ้าเป็นผู้ส่งหรือผู้รับ
+      allow read: if request.auth != null && 
+                    (request.auth.uid == resource.data.fromUserId || 
+                     request.auth.uid == resource.data.toUserId);
+      
+      // อนุญาตให้สร้างถ้าเป็นผู้ส่ง
+      allow create: if request.auth != null && 
+                      request.auth.uid == request.resource.data.fromUserId;
+      
+      // อนุญาตให้ update/delete ถ้าเป็นผู้ส่งหรือผู้รับ
+      allow update, delete: if request.auth != null && 
+                              (request.auth.uid == resource.data.fromUserId || 
+                               request.auth.uid == resource.data.toUserId);
+    }
+    
+    // ==================== Global Chat Messages Collection ====================
+    // ข้อความแชทสำหรับระบบ P2P (ถ้ามี)
+    match /chat_messages/{messageId} {
+      // อนุญาตให้อ่านทุกคนที่ login
+      allow read: if request.auth != null;
+      
+      // อนุญาตให้เขียนถ้า login แล้ว
+      allow write: if request.auth != null;
+    }
+    
+    // ปิดการเข้าถึง collection อื่นๆ ที่ไม่ได้กำหนด
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

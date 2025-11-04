@@ -1,0 +1,28 @@
+{
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "offgrid-c8d5d",
+          "appId": "1:817393750877:android:cec156b67813117d794eb4",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "offgrid-c8d5d",
+          "configurations": {
+            "android": "1:817393750877:android:cec156b67813117d794eb4",
+            "ios": "1:817393750877:ios:5ec9a36f08d5f4a5794eb4",
+            "macos": "1:817393750877:ios:5ec9a36f08d5f4a5794eb4",
+            "web": "1:817393750877:web:bb6beafd414ae6ff794eb4",
+            "windows": "1:817393750877:web:e2bd023fd11d100c794eb4"
+          }
+        }
+      }
+    }
+  }
+}

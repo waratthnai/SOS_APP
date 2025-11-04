@@ -1,0 +1,404 @@
+// lib/ui/profile_screen.dart
+import 'package:flutter/material.dart';
+import '../core/friend_service.dart';
+
+class ProfileScreen extends StatefulWidget {
+  const ProfileScreen({super.key});
+
+  @override
+  State<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  final _nameController = TextEditingController();
+  final _bioController = TextEditingController();
+  bool _isLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUserProfile();
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _bioController.dispose();
+    super.dispose();
+  }
+
+  void _loadUserProfile() {
+    final user = friendService.currentUser;
+    if (user != null) {
+      _nameController.text = user.name;
+      _bioController.text = user.bio ?? '';
+    }
+  }
+
+  Future<void> _updateProfile() async {
+    final currentUser = friendService.currentUser;
+    if (currentUser == null) return;
+
+    final name = _nameController.text.trim();
+    if (name.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('กรุณาใส่ชื่อ')),
+      );
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    try {
+      final updatedProfile = currentUser.copyWith(
+        name: name,
+        bio: _bioController.text.trim().isEmpty ? null : _bioController.text.trim(),
+        lastActiveAt: DateTime.now(),
+      );
+
+      await friendService.updateUserProfile(updatedProfile);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('อัปเดตโปรไฟล์เรียบร้อยแล้ว')),
+        );
+        Navigator.pop(context);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('เกิดข้อผิดพลาด: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('โปรไฟล์'),
+        actions: [
+          if (_isLoading)
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.all(16),
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            )
+          else
+            TextButton(
+              onPressed: _updateProfile,
+              child: const Text('บันทึก'),
+            ),
+        ],
+      ),
+      body: AnimatedBuilder(
+        animation: friendService,
+        builder: (context, _) {
+          final currentUser = friendService.currentUser;
+          if (currentUser == null) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          return SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                // Profile Picture Section
+                const SizedBox(height: 32),
+                Center(
+                  child: Stack(
+                    children: [
+                      CircleAvatar(
+                        radius: 60,
+                        backgroundColor: cs.primaryContainer,
+                        backgroundImage: currentUser.avatar != null 
+                          ? NetworkImage(currentUser.avatar!) 
+                          : null,
+                        child: currentUser.avatar == null 
+                          ? Text(
+                              currentUser.name.isNotEmpty ? currentUser.name[0].toUpperCase() : '?',
+                              style: theme.textTheme.displayMedium?.copyWith(
+                                color: cs.onPrimaryContainer,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            )
+                          : null,
+                      ),
+                      Positioned(
+                        bottom: 0,
+                        right: 0,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: cs.primary,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: cs.surface, width: 2),
+                          ),
+                          child: IconButton(
+                            icon: Icon(Icons.camera_alt, color: cs.onPrimary, size: 20),
+                            onPressed: () {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('ฟีเจอร์นี้จะพัฒนาในเวอร์ชันต่อไป')),
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                
+                const SizedBox(height: 32),
+                
+                // User ID Card
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'ID ของคุณ',
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            color: cs.onSurfaceVariant,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                decoration: BoxDecoration(
+                                  color: cs.surfaceContainerHighest,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Text(
+                                  currentUser.id,
+                                  style: theme.textTheme.bodyLarge?.copyWith(
+                                    fontFamily: 'monospace',
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            IconButton(
+                              icon: const Icon(Icons.copy),
+                              onPressed: () {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('คัดลอก ID แล้ว')),
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'แชร์ ID นี้กับเพื่อนเพื่อให้พวกเขาสามารถเพิ่มคุณเป็นเพื่อนได้',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: cs.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                
+                const SizedBox(height: 24),
+                
+                // Name Field
+                _buildTextField(
+                  controller: _nameController,
+                  label: 'ชื่อ',
+                  icon: Icons.person,
+                  required: true,
+                ),
+                
+                const SizedBox(height: 16),
+                
+                // Bio Field
+                _buildTextField(
+                  controller: _bioController,
+                  label: 'คำอธิบาย (ไม่จำเป็น)',
+                  icon: Icons.info_outline,
+                  maxLines: 3,
+                  maxLength: 200,
+                ),
+                
+                const SizedBox(height: 32),
+                
+                // Stats Card
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'สถิติ',
+                          style: theme.textTheme.titleMedium,
+                        ),
+                        const SizedBox(height: 16),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: _buildStatItem(
+                                context,
+                                'เพื่อน',
+                                '${friendService.friends.length}',
+                                Icons.people,
+                                cs.tertiary,
+                              ),
+                            ),
+                            Expanded(
+                              child: _buildStatItem(
+                                context,
+                                'ออนไลน์',
+                                '${friendService.onlineFriends.length}',
+                                Icons.circle,
+                                const Color(0xFF43A047),
+                              ),
+                            ),
+                            Expanded(
+                              child: _buildStatItem(
+                                context,
+                                'ข้อความ',
+                                '${friendService.totalUnreadCount}',
+                                Icons.message,
+                                cs.primary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                
+                const SizedBox(height: 24),
+                
+                // Account Info
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'ข้อมูลบัญชี',
+                          style: theme.textTheme.titleMedium,
+                        ),
+                        const SizedBox(height: 16),
+                        _buildInfoRow(context, 'สร้างเมื่อ', _formatDate(currentUser.createdAt)),
+                        _buildInfoRow(context, 'เข้าใช้ล่าสุด', _formatDate(currentUser.lastActiveAt)),
+                        if (currentUser.email != null)
+                          _buildInfoRow(context, 'อีเมล', currentUser.email!),
+                      ],
+                    ),
+                  ),
+                ),
+                
+                const SizedBox(height: 32),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildTextField({
+    required TextEditingController controller,
+    required String label,
+    required IconData icon,
+    bool required = false,
+    int maxLines = 1,
+    int? maxLength,
+  }) {
+    return TextField(
+      controller: controller,
+      decoration: InputDecoration(
+        labelText: label,
+        prefixIcon: Icon(icon),
+        counterText: maxLength != null ? null : '',
+      ),
+      maxLines: maxLines,
+      maxLength: maxLength,
+    );
+  }
+
+  Widget _buildStatItem(BuildContext context, String label, String value, IconData icon, Color iconColor) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: iconColor.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(icon, color: iconColor, size: 28),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          value,
+          style: theme.textTheme.headlineSmall?.copyWith(
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        Text(
+          label,
+          style: theme.textTheme.labelMedium?.copyWith(
+            color: cs.onSurfaceVariant,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildInfoRow(BuildContext context, String label, String value) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Text(
+            '$label: ',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: cs.onSurfaceVariant,
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatDate(DateTime date) {
+    return '${date.day}/${date.month}/${date.year} ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
+  }
+}
