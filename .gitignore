@@ -33,6 +33,22 @@ migrate_working_dir/
 /build/
 /coverage/
 
+# Android/iOS build files (exclude all build outputs)
+android/app/build/
+android/build/
+ios/build/
+macos/build/
+windows/build/
+linux/build/
+
+# Native libraries and compiled files
+*.so
+*.dylib
+*.dll
+*.apk
+*.ipa
+*.app
+
 # Symbolication related
 app.*.symbols
 
