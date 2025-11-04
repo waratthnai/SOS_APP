@@ -993,12 +993,9 @@ class _MessageBubble extends StatelessWidget {
                       ),
                       if (isFromMe) ...[
                         const SizedBox(width: 4),
-                        Icon(
-                          message.isDelivered ? Icons.done_all : Icons.done,
-                          size: 14,
-                          color: message.isRead 
-                            ? Colors.blue 
-                            : cs.onPrimary.withOpacity(0.7),
+                        _MessageStatusIcon(
+                          isDelivered: message.isDelivered,
+                          isRead: message.isRead,
                         ),
                       ],
                     ],
@@ -1023,5 +1020,42 @@ class _MessageBubble extends StatelessWidget {
     } else {
       return '${time.day}/${time.month} ${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
     }
+  }
+}
+
+/// 📊 Widget แสดงสถานะข้อความสำหรับ Friend Chat
+class _MessageStatusIcon extends StatelessWidget {
+  final bool isDelivered;
+  final bool isRead;
+  
+  const _MessageStatusIcon({
+    required this.isDelivered,
+    required this.isRead,
+  });
+  
+  @override
+  Widget build(BuildContext context) {
+    IconData icon;
+    Color iconColor;
+    
+    if (!isDelivered) {
+      // ⏳ ค้างส่ง / กำลังส่ง
+      icon = Icons.access_time;
+      iconColor = Colors.grey;
+    } else if (!isRead) {
+      // ✓ ส่งแล้ว (ยังไม่อ่าน)
+      icon = Icons.done;
+      iconColor = Colors.grey;
+    } else {
+      // ✓✓ อ่านแล้ว
+      icon = Icons.done_all;
+      iconColor = Colors.blue;
+    }
+    
+    return Icon(
+      icon,
+      size: 14,
+      color: iconColor,
+    );
   }
 }
