@@ -120,20 +120,7 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
       }
 
       // 🆕 เพิ่มวิดีโอในแชทของตัวเองทันที (เพื่อให้เห็นว่าส่งไปแล้ว)
-      final videoMessage = ChatMessage(
-        id: 'vid_${DateTime.now().millisecondsSinceEpoch}',
-        from: 'me',
-        type: ChatType.video,
-        filePath: videoFile.path, // เก็บ path ของวิดีโอที่ส่ง
-        time: DateTime.now(),
-        isEmergency: false,
-      );
-      
-      // เพิ่มในแชท
-      appState.chatMessages.add(videoMessage);
-      
-      // Trigger UI update
-      setState(() {});
+      appState.addChatVideo(videoFile.path);
 
       // ส่งไฟล์ผ่าน transport layer
       await appState.transport.sendFile(
@@ -184,20 +171,7 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
       }
 
       // 🆕 เพิ่มรูปภาพในแชทของตัวเองทันที (เพื่อให้เห็นว่าส่งไปแล้ว)
-      final imageMessage = ChatMessage(
-        id: 'img_${DateTime.now().millisecondsSinceEpoch}',
-        from: 'me',
-        type: ChatType.image,
-        filePath: imageFile.path, // เก็บ path ของรูปที่ส่ง
-        time: DateTime.now(),
-        isEmergency: false,
-      );
-      
-      // เพิ่มในแชท
-      appState.chatMessages.add(imageMessage);
-      
-      // Trigger UI update
-      setState(() {});
+      appState.addChatImage(imageFile.path);
 
       // ส่งไฟล์ผ่าน transport layer
       await appState.transport.sendFile(
@@ -409,31 +383,6 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
                     'หน่วยกู้ภัย',
                     style: TextStyle(
                       color: Colors.blue,
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ],
-              ),
-            )
-          else
-            Container(
-              margin: const EdgeInsets.only(right: 8),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.red.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.red.withOpacity(0.3)),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.warning_amber_rounded, color: Colors.red, size: 14),
-                  const SizedBox(width: 4),
-                  Text(
-                    'ฉุกเฉิน',
-                    style: TextStyle(
-                      color: Colors.red,
                       fontSize: 12,
                       fontWeight: FontWeight.bold,
                     ),

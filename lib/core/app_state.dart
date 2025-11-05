@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter/material.dart'; // เพิ่มสำหรับ MaterialPageRoute
+import 'package:flutter/services.dart'; // เพิ่มสำหรับ HapticFeedback
 import 'package:geolocator/geolocator.dart';
 import 'transport.dart';
 import 'chat_models.dart';
@@ -59,13 +60,26 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> toggleRescueMode() async {
     _isRescueMode = !_isRescueMode;
     
+    // ⚠️ ถ้าเปิด Rescue Mode ให้ปิด SOS Mode อัตโนมัติ
+    if (_isRescueMode && _isSOSActive) {
+      debugPrint('⚠️ ปิด SOS Mode เพื่อเปิด Rescue Mode');
+      _isSOSActive = false;
+      await broadcastSOSStatus(isActive: false);
+      // หยุดการสแกนของโหมด SOS
+      await stopScan();
+    }
+    
     // Broadcast สถานะหน่วยกู้ภัยไปยังอุปกรณ์ใกล้เคียง
     if (_isRescueMode) {
       await _broadcastRescueStatus(true);
-      debugPrint('🚑 เปิดโหมดหน่วยกู้ภัย');
+      // 🔄 เริ่มสแกนอัตโนมัติแบบต่อเนื่อง
+      await startScan();
+      debugPrint('🚑 เปิดโหมดหน่วยกู้ภัย + เริ่มสแกนอัตโนมัติ');
     } else {
       await _broadcastRescueStatus(false);
-      debugPrint('🚑 ปิดโหมดหน่วยกู้ภัย');
+      // หยุดการสแกน
+      await stopScan();
+      debugPrint('🚑 ปิดโหมดหน่วยกู้ภัย + หยุดสแกน');
     }
     
     notifyListeners();
@@ -75,6 +89,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> _broadcastRescueStatus(bool isRescue) async {
     final status = isRescue ? 'RESCUE_MODE_ON' : 'RESCUE_MODE_OFF';
     final message = 'RESCUE_STATUS:$_deviceName:$status';
+    debugPrint('🔍 [DEBUG] กำลังส่ง Broadcast: $message');
     await transport.sendMessage(message);
     debugPrint('📡 Broadcast: $message');
   }
@@ -82,8 +97,19 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   // 🚨 เปิด/ปิด โหมด SOS
   Future<void> toggleSOSMode() async {
     _isSOSActive = !_isSOSActive;
+    debugPrint('🔍 [DEBUG] toggleSOSMode: _isSOSActive = $_isSOSActive');
+    
+    // ⚠️ ถ้าเปิด SOS Mode ให้ปิด Rescue Mode อัตโนมัติ
+    if (_isSOSActive && _isRescueMode) {
+      debugPrint('⚠️ ปิด Rescue Mode เพื่อเปิด SOS Mode');
+      _isRescueMode = false;
+      await _broadcastRescueStatus(false);
+      // หยุดการสแกนของโหมดกู้ภัย
+      await stopScan();
+    }
     
     if (_isSOSActive) {
+      debugPrint('🔍 [DEBUG] กำลังเปิดโหมด SOS...');
       // ดึงตำแหน่งปัจจุบัน
       Position? position = await _getCurrentLocation();
       
@@ -94,10 +120,15 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         longitude: position?.longitude,
       );
       
-      debugPrint('🚨 เปิดโหมด SOS');
+      // 🔄 เริ่มสแกนอัตโนมัติแบบต่อเนื่อง
+      await startScan();
+      debugPrint('🚨 เปิดโหมด SOS + เริ่มสแกนอัตโนมัติ');
     } else {
+      debugPrint('🔍 [DEBUG] กำลังปิดโหมด SOS...');
       await broadcastSOSStatus(isActive: false);
-      debugPrint('🚨 ปิดโหมด SOS');
+      // หยุดการสแกน
+      await stopScan();
+      debugPrint('🚨 ปิดโหมด SOS + หยุดสแกน');
     }
     
     notifyListeners();
@@ -197,13 +228,39 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   void _subs() {
     transport.onPeers.listen((list) {
+      final oldPeersCount = _peers.length;
       _peers
         ..clear()
         ..addAll(list);
+      
+      // 🔄 เมื่อมี peer ใหม่เชื่อมต่อ → ส่งสถานะโหมดปัจจุบันให้ peer รู้
+      if (list.length > oldPeersCount) {
+        debugPrint('🔍 [DEBUG] มี peer ใหม่เชื่อมต่อ (${list.length} peers) → ส่งสถานะโหมดปัจจุบัน');
+        
+        // ส่งสถานะ Rescue Mode (ถ้าเปิดอยู่)
+        if (_isRescueMode) {
+          debugPrint('🔍 [DEBUG] กำลังส่ง Rescue status หลังเชื่อมต่อใหม่...');
+          _broadcastRescueStatus(true);
+        }
+        
+        // ส่งสถานะ SOS Mode (ถ้าเปิดอยู่)
+        if (_isSOSActive) {
+          debugPrint('🔍 [DEBUG] กำลังส่ง SOS status หลังเชื่อมต่อใหม่...');
+          _getCurrentLocation().then((position) {
+            broadcastSOSStatus(
+              isActive: true,
+              latitude: position?.latitude,
+              longitude: position?.longitude,
+            );
+          });
+        }
+      }
+      
       notifyListeners();
     });
     transport.onMessage.listen((m) {
       debugPrint('📨 ได้รับข้อความจาก ${m.fromPeerId}: ${m.body}');
+      debugPrint('🔍 [DEBUG] กำลังประมวลผลข้อความ...');
       
       // ⚠️ เปลี่ยนจาก: ต้องมี user ล็อกอินก่อน
       // เป็น: ถ้าไม่ได้ login ก็ใช้ anonymous ID
@@ -211,12 +268,14 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       
       // 🚑 ตรวจสอบสถานะหน่วยกู้ภัย
       if (m.body.startsWith('RESCUE_STATUS:')) {
+        debugPrint('🔍 [DEBUG] ✅ พบข้อความ RESCUE_STATUS! กำลังเรียก _handleRescueStatus()');
         _handleRescueStatus(m.body, m.fromPeerId);
         return;
       }
       
       // 🚨 ตรวจสอบสถานะ SOS
       if (m.body.startsWith('SOS_STATUS:')) {
+        debugPrint('🔍 [DEBUG] ✅ พบข้อความ SOS_STATUS! กำลังเรียก _handleSOSStatus()');
         _handleSOSStatus(m.body, m.fromPeerId);
         return;
       }
@@ -287,11 +346,25 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         
         final currentUserId = friendService.currentUser?.id ?? 'anonymous';
         
-        // สร้าง ChatMessage สำหรับรูปภาพที่ได้รับ
+        // ตรวจสอบประเภทไฟล์จาก extension
+        final lowerPath = file.filePath.toLowerCase();
+        debugPrint('🔍 ตรวจสอบประเภทไฟล์: $lowerPath');
+        
+        final isVideo = lowerPath.endsWith('.mp4') ||
+                        lowerPath.endsWith('.mov') ||
+                        lowerPath.endsWith('.avi') ||
+                        lowerPath.endsWith('.mpeg') ||
+                        lowerPath.endsWith('.mkv') ||
+                        lowerPath.contains('video') ||
+                        lowerPath.contains('received_videos');
+        
+        debugPrint('📋 ไฟล์ประเภท: ${isVideo ? "วิดีโอ" : "รูปภาพ"}');
+        
+        // สร้าง ChatMessage สำหรับไฟล์ที่ได้รับ
         final msg = ChatMessage(
           id: 'file_${_chatMessages.length + 1}',
           from: file.fromPeerId,
-          type: ChatType.image, // สมมติว่าเป็นรูปภาพ TODO: ตรวจสอบ extension
+          type: isVideo ? ChatType.video : ChatType.image,
           filePath: file.filePath,
           time: file.time,
           isEmergency: false,
@@ -305,7 +378,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         // แจ้งเตือน
         NotificationService().showMessageNotification(
           file.fromPeerId.length > 8 ? '${file.fromPeerId.substring(0, 8)}...' : file.fromPeerId,
-          '📷 ส่งรูปภาพมาให้',
+          isVideo ? '🎥 ส่งวิดีโอมาให้' : '📷 ส่งรูปภาพมาให้',
           senderId: file.fromPeerId, // ส่ง Peer ID เพื่อเปิดแชทได้
           onReply: () {
             // หา peer จาก ID
@@ -320,7 +393,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
           },
         );
         
-        debugPrint('✅ เพิ่มไฟล์ใน chatMessages แล้ว (รวม ${_chatMessages.length} ข้อความ)');
+        debugPrint('✅ เพิ่มไฟล์ใน chatMessages แล้ว (${isVideo ? "วิดีโอ" : "รูปภาพ"}, รวม ${_chatMessages.length} ข้อความ)');
         notifyListeners();
       });
     }
@@ -860,29 +933,62 @@ void addChatVideo(String path) {
   
   /// 🚑 รับสถานะหน่วยกู้ภัยจากเครื่องอื่น
   void _handleRescueStatus(String message, String fromPeerId) {
+    debugPrint('🔍 [DEBUG] _handleRescueStatus เรียกแล้ว');
+    debugPrint('🔍 [DEBUG] ข้อความที่ได้รับ: $message');
+    debugPrint('🔍 [DEBUG] จาก Peer ID: $fromPeerId');
+    
     // Format: "RESCUE_STATUS:deviceName:status"
     final parts = message.split(':');
+    debugPrint('🔍 [DEBUG] แยกข้อความได้ ${parts.length} ส่วน: $parts');
+    
     if (parts.length >= 3 && parts[0] == 'RESCUE_STATUS') {
       final deviceName = parts[1];
       final status = parts[2];
       final isRescue = status == 'RESCUE_MODE_ON';
       
       debugPrint('🚑 ${isRescue ? "เปิด" : "ปิด"}โหมดหน่วยกู้ภัย: $deviceName ($fromPeerId)');
+      debugPrint('🔍 [DEBUG] isRescue = $isRescue');
+      debugPrint('🔍 [DEBUG] _isSOSActive = $_isSOSActive');
       
       // อัพเดท peer metadata (จะใช้ใน UI แสดง badge)
       // เก็บสถานะใน map เพื่อให้ UI access ได้
       _rescuePeers[fromPeerId] = isRescue;
       
-      // แจ้งเตือน
-      if (isRescue) {
+      // 🚨 ถ้าเราเปิดโหมด SOS อยู่ และพบหน่วยกู้ภัย -> แจ้งเตือนพิเศษ!
+      if (isRescue && _isSOSActive) {
+        debugPrint('🔍 [DEBUG] 🎯 เข้าเงื่อนไขแจ้งเตือนพิเศษ! กำลังแสดงการแจ้งเตือน...');
+        
+        NotificationService().showInAppNotification(
+          title: '🚑💚 มีหน่วยกู้ภัยมาช่วยแล้ว!',
+          message: 'พบหน่วยกู้ภัย "$deviceName" อยู่ใกล้คุณ\nกำลังจะมีคนมาช่วยเหลือแล้ว อย่าท้อแท้นะ!',
+          type: NotificationType.success,
+        );
+        
+        // สั่นเบา ๆ เป็นการยืนยันและให้กำลังใจ
+        HapticFeedback.mediumImpact();
+        Future.delayed(const Duration(milliseconds: 300), () {
+          HapticFeedback.lightImpact();
+        });
+        Future.delayed(const Duration(milliseconds: 600), () {
+          HapticFeedback.lightImpact();
+        });
+        
+        debugPrint('💚 ✨ พบหน่วยกู้ภัย! ให้กำลังใจผู้ประสบภัย');
+      } else if (isRescue) {
+        debugPrint('🔍 [DEBUG] เข้าเงื่อนไขแจ้งเตือนปกติ (ไม่ได้เปิด SOS)');
+        // กรณีปกติ (ไม่ได้เปิด SOS)
         NotificationService().showInAppNotification(
           title: '🚑 หน่วยกู้ภัยใกล้เคียง',
           message: '$deviceName พร้อมให้ความช่วยเหลือ',
           type: NotificationType.info,
         );
+      } else {
+        debugPrint('🔍 [DEBUG] ไม่เข้าเงื่อนไขแจ้งเตือนใดๆ');
       }
       
       notifyListeners();
+    } else {
+      debugPrint('🔍 [DEBUG] ❌ ข้อความไม่ตรงรูปแบบ RESCUE_STATUS');
     }
   }
   

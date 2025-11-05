@@ -555,30 +555,6 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  void _showScanDialog(BuildContext context) async {
-    // เริ่มสแกนทันที
-    try {
-      await appState.startScan();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('เกิดข้อผิดพลาด: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
-      return;
-    }
-
-    // แสดง Dialog
-    if (!mounted) return;
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => _ScanningDialog(),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -634,77 +610,300 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       const SizedBox(height: 24),
 
-                      // ปุ่มสแกน - เต็มความกว้าง
-                      GestureDetector(
-                        onTap: () => _showScanDialog(context),
-                        child: Container(
-                          width: double.infinity,
-                          height: 160,
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [cs.primary, cs.error],
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                            ),
-                            borderRadius: BorderRadius.circular(20),
-                            boxShadow: [
-                              BoxShadow(
-                                color: cs.primary.withValues(alpha: 0.3),
-                                blurRadius: 12,
-                                offset: const Offset(0, 6),
+                      // 🚨 โหมดฉุกเฉิน SOS Card
+                      AnimatedBuilder(
+                        animation: appState,
+                        builder: (context, _) {
+                          final isSOSActive = appState.isSOSActive;
+                          return GestureDetector(
+                            onTap: () async {
+                              await appState.toggleSOSMode();
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      isSOSActive
+                                          ? '🚨 ปิดโหมด SOS แล้ว'
+                                          : '🚨 เปิดโหมด SOS - กำลังค้นหาอุปกรณ์ใกล้เคียง...',
+                                    ),
+                                    backgroundColor: isSOSActive
+                                        ? cs.surfaceContainerHighest
+                                        : Colors.red,
+                                    duration: const Duration(seconds: 2),
+                                  ),
+                                );
+                              }
+                            },
+                            child: Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(20),
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                  colors: isSOSActive
+                                      ? [
+                                          const Color(0xFFE53E3E),
+                                          const Color(0xFFFF0000),
+                                        ]
+                                      : [
+                                          cs.surfaceContainer,
+                                          cs.surfaceContainerHigh,
+                                        ],
+                                ),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(
+                                  color: isSOSActive
+                                      ? Colors.red.shade700
+                                      : cs.outline.withOpacity(0.3),
+                                  width: isSOSActive ? 3 : 1,
+                                ),
+                                boxShadow: isSOSActive
+                                    ? [
+                                        BoxShadow(
+                                          color: Colors.red.withOpacity(0.5),
+                                          blurRadius: 20,
+                                          spreadRadius: 5,
+                                        ),
+                                      ]
+                                    : [
+                                        BoxShadow(
+                                          color: cs.shadow.withOpacity(0.1),
+                                          blurRadius: 8,
+                                          offset: const Offset(0, 4),
+                                        ),
+                                      ],
                               ),
-                            ],
-                          ),
-                          child: Padding(
-                            padding: const EdgeInsets.all(24),
-                            child: Row(
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.all(16),
-                                  decoration: BoxDecoration(
-                                    color: cs.onPrimary.withValues(alpha: 0.2),
-                                    borderRadius: BorderRadius.circular(16),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(16),
+                                    decoration: BoxDecoration(
+                                      color: isSOSActive
+                                          ? Colors.white.withOpacity(0.2)
+                                          : cs.errorContainer,
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                    child: Icon(
+                                      Icons.warning_amber_rounded,
+                                      size: 40,
+                                      color: isSOSActive
+                                          ? Colors.white
+                                          : cs.error,
+                                    ),
                                   ),
-                                  child: Icon(
-                                    Icons.radar,
-                                    size: 48,
-                                    color: cs.onPrimary,
-                                  ),
-                                ),
-                                const SizedBox(width: 20),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Text(
-                                        'สแกนหาเครื่องใกล้เคียง',
-                                        style: theme.textTheme.titleLarge
-                                            ?.copyWith(color: cs.onPrimary),
-                                      ),
-                                      const SizedBox(height: 8),
-                                      Text(
-                                        'ค้นหาและแชทฉุกเฉินกับอุปกรณ์ที่อยู่ใกล้เคียง',
-                                        style: theme.textTheme.bodyMedium
-                                            ?.copyWith(
-                                              color: cs.onPrimary.withOpacity(
-                                                0.9,
+                                  const SizedBox(width: 16),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'โหมดฉุกเฉิน SOS',
+                                          style: theme.textTheme.titleLarge
+                                              ?.copyWith(
+                                                color: isSOSActive
+                                                    ? Colors.white
+                                                    : cs.onSurface,
+                                                fontWeight: FontWeight.bold,
                                               ),
-                                            ),
-                                      ),
-                                    ],
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          isSOSActive
+                                              ? 'กำลังค้นหาและส่งสัญญาณ SOS...'
+                                              : 'เปิดเพื่อแจ้งสัญญาณฉุกเฉิน',
+                                          style: theme.textTheme.bodyMedium
+                                              ?.copyWith(
+                                                color: isSOSActive
+                                                    ? Colors.white.withOpacity(0.9)
+                                                    : cs.onSurfaceVariant,
+                                              ),
+                                        ),
+                                      ],
+                                    ),
                                   ),
-                                ),
-                                Icon(
-                                  Icons.arrow_forward_ios,
-                                  color: cs.onPrimary,
-                                  size: 24,
-                                ),
-                              ],
+                                  Switch(
+                                    value: isSOSActive,
+                                    onChanged: (value) async {
+                                      await appState.toggleSOSMode();
+                                      if (context.mounted) {
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          SnackBar(
+                                            content: Text(
+                                              value
+                                                  ? '🚨 เปิดโหมด SOS - กำลังค้นหาอุปกรณ์ใกล้เคียง...'
+                                                  : '🚨 ปิดโหมด SOS แล้ว',
+                                            ),
+                                            backgroundColor: value
+                                                ? Colors.red
+                                                : cs.surfaceContainerHighest,
+                                            duration: const Duration(
+                                              seconds: 2,
+                                            ),
+                                          ),
+                                        );
+                                      }
+                                    },
+                                    activeColor: Colors.white,
+                                    activeTrackColor: Colors.red.shade700,
+                                  ),
+                                ],
+                              ),
                             ),
-                          ),
-                        ),
+                          );
+                        },
+                      ),
+
+                      const SizedBox(height: 16),
+
+                      // 🚑 โหมดหน่วยกู้ภัย Card
+                      AnimatedBuilder(
+                        animation: appState,
+                        builder: (context, _) {
+                          final isRescueMode = appState.isRescueMode;
+                          return GestureDetector(
+                            onTap: () async {
+                              await appState.toggleRescueMode();
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      isRescueMode
+                                          ? '🚑 ปิดโหมดหน่วยกู้ภัยแล้ว'
+                                          : '🚑 เปิดโหมดหน่วยกู้ภัย - กำลังค้นหาผู้ต้องการความช่วยเหลือ...',
+                                    ),
+                                    backgroundColor: isRescueMode
+                                        ? cs.surfaceContainerHighest
+                                        : Colors.blue,
+                                    duration: const Duration(seconds: 2),
+                                  ),
+                                );
+                              }
+                            },
+                            child: Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(20),
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                  colors: isRescueMode
+                                      ? [
+                                          Colors.blue.shade600,
+                                          Colors.blue.shade400,
+                                        ]
+                                      : [
+                                          cs.surfaceContainer,
+                                          cs.surfaceContainerHigh,
+                                        ],
+                                ),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(
+                                  color: isRescueMode
+                                      ? Colors.blue.shade700
+                                      : cs.outline.withOpacity(0.3),
+                                  width: isRescueMode ? 3 : 1,
+                                ),
+                                boxShadow: isRescueMode
+                                    ? [
+                                        BoxShadow(
+                                          color: Colors.blue.withOpacity(0.5),
+                                          blurRadius: 20,
+                                          spreadRadius: 5,
+                                        ),
+                                      ]
+                                    : [
+                                        BoxShadow(
+                                          color: cs.shadow.withOpacity(0.1),
+                                          blurRadius: 8,
+                                          offset: const Offset(0, 4),
+                                          ),
+                                      ],
+                              ),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(16),
+                                    decoration: BoxDecoration(
+                                      color: isRescueMode
+                                          ? Colors.white.withOpacity(0.2)
+                                          : cs.tertiaryContainer,
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                    child: Icon(
+                                      Icons.local_hospital,
+                                      size: 40,
+                                      color: isRescueMode
+                                          ? Colors.white
+                                          : cs.tertiary,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 16),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'โหมดหน่วยกู้ภัย',
+                                          style: theme.textTheme.titleLarge
+                                              ?.copyWith(
+                                                color: isRescueMode
+                                                    ? Colors.white
+                                                    : cs.onSurface,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          isRescueMode
+                                              ? 'กำลังค้นหาผู้ต้องการความช่วยเหลือ...'
+                                              : 'เปิดเพื่อให้ความช่วยเหลือผู้อื่น',
+                                          style: theme.textTheme.bodyMedium
+                                              ?.copyWith(
+                                                color: isRescueMode
+                                                    ? Colors.white.withOpacity(0.9)
+                                                    : cs.onSurfaceVariant,
+                                              ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  Switch(
+                                    value: isRescueMode,
+                                    onChanged: (value) async {
+                                      await appState.toggleRescueMode();
+                                      if (context.mounted) {
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          SnackBar(
+                                            content: Text(
+                                              value
+                                                  ? '🚑 เปิดโหมดหน่วยกู้ภัย - กำลังค้นหาผู้ต้องการความช่วยเหลือ...'
+                                                  : '🚑 ปิดโหมดหน่วยกู้ภัยแล้ว',
+                                            ),
+                                            backgroundColor: value
+                                                ? Colors.blue
+                                                : cs.surfaceContainerHighest,
+                                            duration: const Duration(
+                                              seconds: 2,
+                                            ),
+                                          ),
+                                        );
+                                      }
+                                    },
+                                    activeColor: Colors.white,
+                                    activeTrackColor: Colors.blue.shade700,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
                       ),
 
                       const SizedBox(height: 16),
@@ -1070,279 +1269,6 @@ class _MenuCard extends StatelessWidget {
           ],
         ),
       ),
-    );
-  }
-}
-
-// Dialog สำหรับแสดงผลการสแกน
-class _ScanningDialog extends StatefulWidget {
-  @override
-  State<_ScanningDialog> createState() => _ScanningDialogState();
-}
-
-class _ScanningDialogState extends State<_ScanningDialog> {
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: appState,
-      builder: (context, _) {
-        final peers = appState.peers;
-
-        return Dialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Container(
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Header
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [Color(0xFFE53E3E), Color(0xFFFF0000)],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                    borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(20),
-                      topRight: Radius.circular(20),
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: const Icon(
-                          Icons.radar,
-                          color: Colors.white,
-                          size: 24,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      const Expanded(
-                        child: Text(
-                          'กำลังค้นหาเครื่องใกล้เคียง',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                // Content
-                SizedBox(
-                  width: double.maxFinite,
-                  height: 350,
-                  child: Column(
-                    children: [
-                      if (peers.isEmpty) ...[
-                        Expanded(
-                          child: Center(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.all(20),
-                                  decoration: BoxDecoration(
-                                    color: Colors.red.withOpacity(0.1),
-                                    shape: BoxShape.circle,
-                                  ),
-                                  child: const CircularProgressIndicator(
-                                    color: Colors.red,
-                                    strokeWidth: 3,
-                                  ),
-                                ),
-                                const SizedBox(height: 24),
-                                const Text(
-                                  'กำลังค้นหา...',
-                                  style: TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.black87,
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                const Padding(
-                                  padding: EdgeInsets.symmetric(horizontal: 40),
-                                  child: Text(
-                                    'โปรดตรวจสอบว่าอุปกรณ์อื่นเปิดแอพอยู่',
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      color: Colors.grey,
-                                    ),
-                                    textAlign: TextAlign.center,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ] else ...[
-                        Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'พบ ${peers.length} เครื่อง',
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.black87,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                'แตะเพื่อเริ่มแชทฉุกเฉิน',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.grey[600],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Expanded(
-                          child: ListView.builder(
-                            padding: const EdgeInsets.symmetric(horizontal: 16),
-                            itemCount: peers.length,
-                            itemBuilder: (context, index) {
-                              final peer = peers[index];
-                              return Container(
-                                margin: const EdgeInsets.only(bottom: 8),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(
-                                    color: Colors.grey.shade200,
-                                  ),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.black.withOpacity(0.05),
-                                      blurRadius: 4,
-                                      offset: const Offset(0, 2),
-                                    ),
-                                  ],
-                                ),
-                                child: ListTile(
-                                  contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 16,
-                                    vertical: 8,
-                                  ),
-                                  leading: Container(
-                                    padding: const EdgeInsets.all(10),
-                                    decoration: BoxDecoration(
-                                      gradient: const LinearGradient(
-                                        colors: [
-                                          Color(0xFFE53E3E),
-                                          Color(0xFFFF0000),
-                                        ],
-                                      ),
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: const Icon(
-                                      Icons.phone_android,
-                                      color: Colors.white,
-                                      size: 24,
-                                    ),
-                                  ),
-                                  title: Text(
-                                    peer.name.isNotEmpty
-                                        ? peer.name
-                                        : 'อุปกรณ์ไม่ระบุชื่อ',
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 16,
-                                    ),
-                                  ),
-                                  subtitle: Text(
-                                    'ID: ${peer.id}',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Colors.grey[600],
-                                    ),
-                                  ),
-                                  trailing: ElevatedButton.icon(
-                                    onPressed: () {
-                                      Navigator.pop(context); // ปิด Dialog
-
-                                      // เปิดหน้าแชทฉุกเฉิน (UI สวยแบบเดียวกับ FriendChat)
-                                      Navigator.push(
-                                        context,
-                                        MaterialPageRoute(
-                                          builder: (_) =>
-                                              EmergencyChatScreen(peer: peer),
-                                        ),
-                                      );
-                                    },
-                                    icon: const Icon(Icons.message, size: 16),
-                                    label: const Text('แชท'),
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: Colors.red,
-                                      foregroundColor: Colors.white,
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 16,
-                                        vertical: 8,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-
-                // Bottom Button
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed: () async {
-                        await appState.stopScan();
-                        if (mounted) Navigator.pop(context);
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.grey[300],
-                        foregroundColor: Colors.black87,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                      child: const Text(
-                        'ปิด',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
     );
   }
 }
@@ -2284,191 +2210,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                 const SizedBox(height: 24),
 
-                // 🚑 Rescue Mode Card - แสดงเสมอ (ไม่ว่าจะ login หรือไม่)
-                AnimatedBuilder(
-                  animation: appState,
-                  builder: (context, _) {
-                    final isRescueMode = appState.isRescueMode;
-                    return Card(
-                      elevation: isRescueMode ? 8 : 2,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(12),
-                          gradient: LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: isRescueMode
-                                ? [
-                                    cs.tertiaryContainer,
-                                    cs.tertiary.withOpacity(0.3),
-                                  ]
-                                : [
-                                    cs.surfaceContainerHighest,
-                                    cs.surfaceContainer,
-                                  ],
-                          ),
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.all(20),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  AnimatedContainer(
-                                    duration: const Duration(milliseconds: 300),
-                                    padding: const EdgeInsets.all(8),
-                                    decoration: BoxDecoration(
-                                      color: isRescueMode
-                                          ? cs.tertiary
-                                          : cs.surfaceContainerHigh,
-                                      borderRadius: BorderRadius.circular(12),
-                                      boxShadow: isRescueMode
-                                          ? [
-                                              BoxShadow(
-                                                color: cs.tertiary.withOpacity(
-                                                  0.5,
-                                                ),
-                                                blurRadius: 12,
-                                                spreadRadius: 2,
-                                              ),
-                                            ]
-                                          : [],
-                                    ),
-                                    child: Icon(
-                                      Icons.local_hospital,
-                                      color: isRescueMode
-                                          ? cs.onTertiary
-                                          : cs.onSurfaceVariant,
-                                      size: 28,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          'โหมดหน่วยกู้ภัย',
-                                          style: theme.textTheme.titleLarge,
-                                        ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          'เปิดเพื่อแจ้งให้ผู้ใกล้เคียงรู้ว่าคุณพร้อมให้ความช่วยเหลือ',
-                                          style: theme.textTheme.bodySmall
-                                              ?.copyWith(
-                                                color: cs.onSurfaceVariant,
-                                              ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 16),
-                              AnimatedContainer(
-                                duration: const Duration(milliseconds: 300),
-                                padding: const EdgeInsets.all(16),
-                                decoration: BoxDecoration(
-                                  color: isRescueMode
-                                      ? cs.tertiary.withOpacity(0.2)
-                                      : cs.surface,
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(
-                                    color: isRescueMode
-                                        ? cs.tertiary
-                                        : cs.outline.withOpacity(0.3),
-                                    width: isRescueMode ? 2 : 1,
-                                  ),
-                                ),
-                                child: Row(
-                                  children: [
-                                    AnimatedSwitcher(
-                                      duration: const Duration(
-                                        milliseconds: 300,
-                                      ),
-                                      child: Icon(
-                                        isRescueMode
-                                            ? Icons.health_and_safety
-                                            : Icons.health_and_safety_outlined,
-                                        key: ValueKey(isRescueMode),
-                                        color: isRescueMode
-                                            ? cs.tertiary
-                                            : cs.onSurfaceVariant,
-                                        size: 32,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 16),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            isRescueMode
-                                                ? 'กำลังออนไลน์'
-                                                : 'ปิดใช้งาน',
-                                            style: theme.textTheme.titleMedium
-                                                ?.copyWith(
-                                                  color: isRescueMode
-                                                      ? cs.tertiary
-                                                      : null,
-                                                  fontWeight: FontWeight.bold,
-                                                ),
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            isRescueMode
-                                                ? 'ผู้ใกล้เคียงเห็นคุณเป็นหน่วยกู้ภัย 🚑'
-                                                : 'เปิดเพื่อแสดงสถานะหน่วยกู้ภัย',
-                                            style: theme.textTheme.bodySmall
-                                                ?.copyWith(
-                                                  color: isRescueMode
-                                                      ? cs.tertiary.withOpacity(
-                                                          0.8,
-                                                        )
-                                                      : cs.onSurfaceVariant,
-                                                ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    Switch(
-                                      value: isRescueMode,
-                                      onChanged: (value) async {
-                                        await appState.toggleRescueMode();
-                                        if (context.mounted) {
-                                          ScaffoldMessenger.of(
-                                            context,
-                                          ).showSnackBar(
-                                            SnackBar(
-                                              content: Text(
-                                                value
-                                                    ? '🚑 เปิดโหมดหน่วยกู้ภัยแล้ว'
-                                                    : '⚪ ปิดโหมดหน่วยกู้ภัยแล้ว',
-                                              ),
-                                              backgroundColor: value
-                                                  ? cs.tertiary
-                                                  : cs.surfaceContainerHighest,
-                                              duration: const Duration(
-                                                seconds: 2,
-                                              ),
-                                            ),
-                                          );
-                                        }
-                                      },
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    );
-                  },
-                ),
                 // Profile Card - แสดงเฉพาะตอน login
                 if (user != null)
                   Card(

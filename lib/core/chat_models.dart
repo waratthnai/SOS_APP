@@ -11,6 +11,19 @@ enum MessageStatus {
   synced,    // ✓✓✓ ซิงก์ขึ้น Cloud แล้ว
 }
 
+// TODO: เพิ่มระบบคิวข้อความในเครื่อง (Local Queue)
+// - เก็บข้อความที่ส่งไม่สำเร็จไว้ในคิว
+// - ส่งใหม่อัตโนมัติเมื่อเชื่อมต่อได้
+// - บันทึกลง SharedPreferences/SQLite
+//
+// TODO: เพิ่มระบบซิงก์ข้อความขึ้น Firebase Cloud
+// - เมื่อออนไลน์ ให้ซิงก์ข้อความจากคิวขึ้น Cloud
+// - อัพเดทสถานะเป็น 'synced' เมื่อซิงก์สำเร็จ
+//
+// TODO: เพิ่ม UI แสดงสถานะข้อความในช่องแชท
+// - แสดงไอคอน: ⏳ (pending), ✓ (sent), ✓✓ (delivered), ☁️ (synced)
+// - แสดงข้อความ retry สำหรับข้อความที่ส่งไม่สำเร็จ
+
 class ChatMessage {
   final String id;
   final String from; // 'me' หรือ peerId

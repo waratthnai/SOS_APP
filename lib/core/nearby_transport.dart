@@ -18,7 +18,8 @@ const _serviceId = 'com.example.offgrid_sos.nearby';
 class _PendingFile {
   final String fromPeerId;
   final String? uri;
-  const _PendingFile(this.fromPeerId, this.uri);
+  final String? fileType; // 'VIDEO' หรือ 'IMAGE'
+  const _PendingFile(this.fromPeerId, this.uri, {this.fileType});
 }
 
 class NearbyTransport implements Transport {
@@ -32,6 +33,7 @@ class NearbyTransport implements Transport {
   final Set<String> _found = {};
   final Map<int, _PendingFile> _pendingFiles = {}; // payloadId -> file info
   final Set<String> _pendingConnections = {}; // ป้องกันการ request ซ้ำ
+  final Map<String, String> _fileMetadata = {}; // peerId -> fileType (VIDEO/IMAGE)
 
   DiscoveryState _state = DiscoveryState.idle;
   bool _isAdvertising = false;
@@ -186,22 +188,31 @@ class NearbyTransport implements Transport {
             rid,
             onPayLoadRecieved: (eid, payload) {
               print('📨 [Discovery] Received payload from: $eid (type: ${payload.type})');
+              print('   Payload size: ${payload.bytes?.length ?? 0} bytes');
+              
               if (payload.type == PayloadType.BYTES) {
                 final rawBytes = payload.bytes!;
+                print('📦 BYTES payload received, size: ${rawBytes.length}');
                 
-                // ตรวจสอบว่าเป็นรูปภาพหรือข้อความ
+                // ตรวจสอบว่าเป็นรูปภาพ, วิดีโอ หรือข้อความ
                 const imageMarker = 'IMAGE:';
-                final markerBytes = utf8.encode(imageMarker);
+                const videoMarker = 'VIDEO:';
+                const metadataMarker = 'FILE_METADATA:';
                 
                 // เช็คว่า bytes ขึ้นต้นด้วย marker หรือไม่
-                if (rawBytes.length > markerBytes.length) {
-                  final headerBytes = rawBytes.sublist(0, markerBytes.length);
-                  if (String.fromCharCodes(headerBytes) == imageMarker) {
-                    // นี่คือรูปภาพ!
-                    print('📷 ได้รับรูปภาพจาก: $eid');
+                if (rawBytes.length > 6) { // ความยาวขั้นต่ำของ marker
+                  final headerStr = String.fromCharCodes(rawBytes.sublist(0, 6));
+                  
+                  // ตรวจสอบว่าเป็นไฟล์ (IMAGE: หรือ VIDEO:)
+                  if (headerStr == imageMarker || headerStr == videoMarker) {
+                    // นี่คือไฟล์ (รูปหรือวิดีโอ)!
+                    final isVideo = headerStr == videoMarker;
+                    final fileType = isVideo ? 'วิดีโอ' : 'รูปภาพ';
+                    print('📷 ได้รับ$fileType จาก: $eid');
                     
                     try {
                       // Parse: [marker][length][name][data]
+                      final markerBytes = utf8.encode(headerStr);
                       int offset = markerBytes.length;
                       final fileNameLength = rawBytes[offset];
                       offset++;
@@ -210,30 +221,62 @@ class NearbyTransport implements Transport {
                       final fileName = utf8.decode(fileNameBytes);
                       offset += fileNameLength;
                       
-                      final imageBytes = rawBytes.sublist(offset);
+                      final fileBytes = rawBytes.sublist(offset);
                       
-                      print('📊 ชื่อไฟล์: $fileName, ขนาด: ${imageBytes.length} bytes');
+                      print('📊 ชื่อไฟล์: $fileName, ขนาด: ${fileBytes.length} bytes');
                       
-                      // บันทึกรูปภาพลง app directory
-                      _saveReceivedImage(imageBytes, fileName, eid);
+                      // บันทึกไฟล์ลง app directory
+                      if (isVideo) {
+                        _saveReceivedVideo(fileBytes, fileName, eid);
+                      } else {
+                        _saveReceivedImage(fileBytes, fileName, eid);
+                      }
                     } catch (e) {
-                      print('❌ Parse รูปภาพล้มเหลว: $e');
+                      print('❌ Parse ไฟล์ล้มเหลว: $e');
                     }
                     return;
                   }
                 }
                 
-                // ถ้าไม่ใช่รูปภาพ = เป็นข้อความปกติ
-                final text = utf8.decode(rawBytes);
-                print('📩 Message content: $text');
-                _msgCtrl.add(Message(
-                  fromPeerId: eid,
-                  body: text,
-                  time: DateTime.now(),
-                ));
+                // ถ้าไม่ใช่ไฟล์ = อาจเป็น metadata หรือข้อความ
+                // ลอง decode เป็น text (ใช้ try-catch ป้องกัน binary data)
+                try {
+                  final text = utf8.decode(rawBytes);
+                  
+                  // ตรวจสอบ metadata message (สำหรับไฟล์ใหญ่)
+                  if (text.startsWith(metadataMarker)) {
+                    // Parse: FILE_METADATA:VIDEO:filename.mp4
+                    final parts = text.substring(metadataMarker.length).split(':');
+                    if (parts.length >= 2) {
+                      final fileType = parts[0]; // 'VIDEO' or 'IMAGE'
+                      print('📋 ได้รับ metadata: $fileType จาก $eid');
+                      _fileMetadata[eid] = fileType;
+                    }
+                    return;
+                  }
+                  
+                  // ถ้าไม่ใช่ metadata = เป็นข้อความปกติ
+                  if (!text.startsWith('FILE_METADATA:')) {
+                    print('📩 Message content: ${text.length > 50 ? text.substring(0, 50) + "..." : text}');
+                    _msgCtrl.add(Message(
+                      fromPeerId: eid,
+                      body: text,
+                      time: DateTime.now(),
+                    ));
+                  } else {
+                    print('⚠️ Metadata message ไม่ควรมาถึงจุดนี้: $text');
+                  }
+                } catch (e) {
+                  // ถ้า decode ไม่ได้ = เป็น binary data ที่ไม่รู้จัก
+                  print('⚠️ ไม่สามารถ decode payload เป็น text: $e');
+                  print('   ขนาด: ${rawBytes.length} bytes, header: ${rawBytes.take(20).toList()}');
+                }
               } else if (payload.type == PayloadType.FILE) {
                 print('📁 File payload received: ${payload.id}, uri: ${payload.uri}');
-                _pendingFiles[payload.id] = _PendingFile(eid, payload.uri);
+                // เก็บ metadata ที่ได้รับไว้ก่อนหน้า
+                final fileType = _fileMetadata[eid];
+                print('📋 File type from metadata: $fileType');
+                _pendingFiles[payload.id] = _PendingFile(eid, payload.uri, fileType: fileType);
               }
             },
             onPayloadTransferUpdate: (eid, status) {
@@ -242,14 +285,16 @@ class NearbyTransport implements Transport {
                 if (fileInfo != null && fileInfo.uri != null) {
                   print('✅ File transfer complete: ${fileInfo.uri}');
                   
-                  // 🆕 Copy ไฟล์ไปเก็บถาวร
-                  _copyFileToPermanentStorage(fileInfo.uri!).then((permanentPath) {
+                  // 🆕 Copy ไฟล์ไปเก็บถาวร (ส่ง fileType จาก metadata)
+                  _copyFileToPermanentStorage(fileInfo.uri!, fileType: fileInfo.fileType).then((permanentPath) {
                     print('📁 ไฟล์ถูกเก็บที่: $permanentPath');
                     _fileCtrl.add(ReceivedFile(
                       fromPeerId: fileInfo.fromPeerId,
                       filePath: permanentPath, // ใช้ path ที่ copy แล้ว
                       time: DateTime.now(),
                     ));
+                    // ล้าง metadata หลังใช้แล้ว
+                    _fileMetadata.remove(fileInfo.fromPeerId);
                   }).catchError((error) {
                     print('❌ Copy ไฟล์ล้มเหลว: $error');
                     // ถ้า copy ไม่ได้ ใช้ URI เดิม
@@ -334,7 +379,10 @@ class NearbyTransport implements Transport {
     try {
       // เริ่มทั้ง advertise (ให้คนอื่นเห็นเรา) และ discovery (ค้นหาเอง)
       // 1) โฆษณาอุปกรณ์เรา
-      print('📢 Starting advertising as: $deviceName');
+      print('📢 Starting advertising...');
+      print('   Device name: "$deviceName"');
+      print('   Service ID: $_serviceId');
+      print('   Strategy: $_strategy');
       
       try {
         await Nearby().startAdvertising(
@@ -362,23 +410,32 @@ class NearbyTransport implements Transport {
               await Nearby().acceptConnection(
                 id,
                 onPayLoadRecieved: (eid, payload) {
-                  print('📨 Received payload from: $eid (type: ${payload.type})');
+                  print('📨 [Advertising] Received payload from: $eid (type: ${payload.type})');
+                  print('   Payload size: ${payload.bytes?.length ?? 0} bytes');
+                  
                   if (payload.type == PayloadType.BYTES) {
                     final rawBytes = payload.bytes!;
+                    print('📦 BYTES payload received, size: ${rawBytes.length}');
                     
-                    // ตรวจสอบว่าเป็นรูปภาพหรือข้อความ
+                    // ตรวจสอบว่าเป็นรูปภาพ, วิดีโอ หรือข้อความ
                     const imageMarker = 'IMAGE:';
-                    final markerBytes = utf8.encode(imageMarker);
+                    const videoMarker = 'VIDEO:';
+                    const metadataMarker = 'FILE_METADATA:';
                     
                     // เช็คว่า bytes ขึ้นต้นด้วย marker หรือไม่
-                    if (rawBytes.length > markerBytes.length) {
-                      final headerBytes = rawBytes.sublist(0, markerBytes.length);
-                      if (String.fromCharCodes(headerBytes) == imageMarker) {
-                        // นี่คือรูปภาพ!
-                        print('📷 ได้รับรูปภาพจาก: $eid');
+                    if (rawBytes.length > 6) { // ความยาวขั้นต่ำของ marker
+                      final headerStr = String.fromCharCodes(rawBytes.sublist(0, 6));
+                      
+                      // ตรวจสอบว่าเป็นไฟล์ (IMAGE: หรือ VIDEO:)
+                      if (headerStr == imageMarker || headerStr == videoMarker) {
+                        // นี่คือไฟล์ (รูปหรือวิดีโอ)!
+                        final isVideo = headerStr == videoMarker;
+                        final fileType = isVideo ? 'วิดีโอ' : 'รูปภาพ';
+                        print('📷 ได้รับ$fileType จาก: $eid');
                         
                         try {
                           // Parse: [marker][length][name][data]
+                          final markerBytes = utf8.encode(headerStr);
                           int offset = markerBytes.length;
                           final fileNameLength = rawBytes[offset];
                           offset++;
@@ -387,30 +444,62 @@ class NearbyTransport implements Transport {
                           final fileName = utf8.decode(fileNameBytes);
                           offset += fileNameLength;
                           
-                          final imageBytes = rawBytes.sublist(offset);
+                          final fileBytes = rawBytes.sublist(offset);
                           
-                          print('📊 ชื่อไฟล์: $fileName, ขนาด: ${imageBytes.length} bytes');
+                          print('📊 ชื่อไฟล์: $fileName, ขนาด: ${fileBytes.length} bytes');
                           
-                          // บันทึกรูปภาพลง app directory
-                          _saveReceivedImage(imageBytes, fileName, eid);
+                          // บันทึกไฟล์ลง app directory
+                          if (isVideo) {
+                            _saveReceivedVideo(fileBytes, fileName, eid);
+                          } else {
+                            _saveReceivedImage(fileBytes, fileName, eid);
+                          }
                         } catch (e) {
-                          print('❌ Parse รูปภาพล้มเหลว: $e');
+                          print('❌ Parse ไฟล์ล้มเหลว: $e');
                         }
                         return;
                       }
                     }
                     
-                    // ถ้าไม่ใช่รูปภาพ = เป็นข้อความปกติ
-                    final text = utf8.decode(rawBytes);
-                    print('📩 Message content: $text');
-                    _msgCtrl.add(Message(
-                      fromPeerId: eid,
-                      body: text,
-                      time: DateTime.now(),
-                    ));
+                    // ถ้าไม่ใช่ไฟล์ = อาจเป็น metadata หรือข้อความ
+                    // ลอง decode เป็น text (ใช้ try-catch ป้องกัน binary data)
+                    try {
+                      final text = utf8.decode(rawBytes);
+                      
+                      // ตรวจสอบ metadata message (สำหรับไฟล์ใหญ่)
+                      if (text.startsWith(metadataMarker)) {
+                        // Parse: FILE_METADATA:VIDEO:filename.mp4
+                        final parts = text.substring(metadataMarker.length).split(':');
+                        if (parts.length >= 2) {
+                          final fileType = parts[0]; // 'VIDEO' or 'IMAGE'
+                          print('📋 ได้รับ metadata: $fileType จาก $eid');
+                          _fileMetadata[eid] = fileType;
+                        }
+                        return;
+                      }
+                      
+                      // ถ้าไม่ใช่ metadata = เป็นข้อความปกติ
+                      if (!text.startsWith('FILE_METADATA:')) {
+                        print('📩 Message content: ${text.length > 50 ? text.substring(0, 50) + "..." : text}');
+                        _msgCtrl.add(Message(
+                          fromPeerId: eid,
+                          body: text,
+                          time: DateTime.now(),
+                        ));
+                      } else {
+                        print('⚠️ Metadata message ไม่ควรมาถึงจุดนี้: $text');
+                      }
+                    } catch (e) {
+                      // ถ้า decode ไม่ได้ = เป็น binary data ที่ไม่รู้จัก
+                      print('⚠️ ไม่สามารถ decode payload เป็น text: $e');
+                      print('   ขนาด: ${rawBytes.length} bytes, header: ${rawBytes.take(20).toList()}');
+                    }
                   } else if (payload.type == PayloadType.FILE) {
                     print('📁 File payload received: ${payload.id}, uri: ${payload.uri}');
-                    _pendingFiles[payload.id] = _PendingFile(eid, payload.uri);
+                    // เก็บ metadata ที่ได้รับไว้ก่อนหน้า
+                    final fileType = _fileMetadata[eid];
+                    print('📋 File type from metadata: $fileType');
+                    _pendingFiles[payload.id] = _PendingFile(eid, payload.uri, fileType: fileType);
                   }
                 },
                 onPayloadTransferUpdate: (eid, status) {
@@ -419,14 +508,16 @@ class NearbyTransport implements Transport {
                     if (fileInfo != null && fileInfo.uri != null) {
                       print('✅ File transfer complete: ${fileInfo.uri}');
                       
-                      // 🆕 Copy ไฟล์ไปเก็บถาวร
-                      _copyFileToPermanentStorage(fileInfo.uri!).then((permanentPath) {
+                      // 🆕 Copy ไฟล์ไปเก็บถาวร (ส่ง fileType จาก metadata)
+                      _copyFileToPermanentStorage(fileInfo.uri!, fileType: fileInfo.fileType).then((permanentPath) {
                         print('📁 ไฟล์ถูกเก็บที่: $permanentPath');
                         _fileCtrl.add(ReceivedFile(
                           fromPeerId: fileInfo.fromPeerId,
                           filePath: permanentPath, // ใช้ path ที่ copy แล้ว
                           time: DateTime.now(),
                         ));
+                        // ล้าง metadata หลังใช้แล้ว
+                        _fileMetadata.remove(fileInfo.fromPeerId);
                       }).catchError((error) {
                         print('❌ Copy ไฟล์ล้มเหลว: $error');
                         // ถ้า copy ไม่ได้ ใช้ URI เดิม
@@ -476,17 +567,22 @@ class NearbyTransport implements Transport {
       }
 
     // 2) ค้นหา endpoint อื่น
+    print('🔎 Starting discovery with serviceId: $_serviceId');
+    print('   My device name: "$deviceName"');
     await Nearby().startDiscovery(
       _serviceId,
       _strategy,
       onEndpointFound: (id, name, serviceId) {
-        print('🔍 Found endpoint: id=$id, name=$name');
+        print('🔍 Found endpoint: id=$id, name="$name", serviceId=$serviceId');
+        print('   Comparing with my name: "$deviceName"');
         
         // ⚠️ ป้องกันการพบเครื่องตัวเอง
         if (name == deviceName) {
           print('⛔ Skipped: Found self (name=$name)');
           return;
         }
+        
+        print('✅ This is a different device, processing...');
         
         _found.add(id);
         
@@ -502,20 +598,22 @@ class NearbyTransport implements Transport {
           return;
         }
         
-        // ⚠️ ป้องกัน bidirectional request: ใช้ ID เป็นตัวตัดสิน
-        // เฉพาะฝั่งที่มี ID น้อยกว่าเท่านั้นที่จะ request
-        // (ฝั่งที่มี ID มากกว่าจะรอรับการเชื่อมต่อจาก advertising side)
+        // ⚠️ ป้องกัน bidirectional request: ใช้ชื่ออุปกรณ์เป็นตัวตัดสิน
+        // เฉพาะฝั่งที่มีชื่อ "น้อยกว่า" (alphabetically) เท่านั้นที่จะ request
+        // (ฝั่งที่มีชื่อ "มากกว่า" จะรอรับการเชื่อมต่อจาก advertising side)
         final myHashCode = deviceName.hashCode;
-        final peerHashCode = id.hashCode;
+        final peerHashCode = name.hashCode; // ใช้ชื่อของ peer แทน id
         
         if (myHashCode >= peerHashCode) {
-          print('⏳ My hash ($myHashCode) >= Peer hash ($peerHashCode)');
+          print('⏳ My name hash ($myHashCode) >= Peer name hash ($peerHashCode)');
+          print('   My name: "$deviceName", Peer name: "$name"');
           print('   Waiting for peer to initiate connection (I will accept via advertising)');
           // ไม่ request - รอให้อีกฝั่ง request มาหาเรา
           return;
         }
         
-        print('✅ My hash ($myHashCode) < Peer hash ($peerHashCode)');
+        print('✅ My name hash ($myHashCode) < Peer name hash ($peerHashCode)');
+        print('   My name: "$deviceName", Peer name: "$name"');
         print('   I will initiate connection');
         
         // เพิ่มใน pending list
@@ -569,7 +667,13 @@ class NearbyTransport implements Transport {
   @override
   Future<void> sendFile(String filePath, {Peer? to}) async {
     try {
-      print('📤 กำลังส่งไฟล์: $filePath');
+      // ตรวจสอบประเภทไฟล์
+      final isVideo = filePath.toLowerCase().endsWith('.mp4') ||
+                      filePath.toLowerCase().endsWith('.mov') ||
+                      filePath.toLowerCase().endsWith('.avi');
+      final fileType = isVideo ? 'วิดีโอ' : 'รูปภาพ';
+      
+      print('📤 กำลังส่ง$fileType: $filePath');
       
       // ตรวจสอบว่าไฟล์มีอยู่จริง
       final file = File(filePath);
@@ -588,8 +692,8 @@ class NearbyTransport implements Transport {
         
         final bytes = await file.readAsBytes();
         
-        // สร้าง payload: [file_marker][filename_length][filename][image_bytes]
-        const marker = 'IMAGE:';
+        // สร้าง payload: [file_marker][filename_length][filename][file_bytes]
+        final marker = isVideo ? 'VIDEO:' : 'IMAGE:';
         final fileName = file.uri.pathSegments.last;
         final markerBytes = utf8.encode(marker);
         final fileNameBytes = utf8.encode(fileName);
@@ -607,10 +711,19 @@ class NearbyTransport implements Transport {
         
         // ส่งเป็น bytes payload
         if (to != null) {
-          print('📤 ส่งรูปภาพไปยัง: ${to.name} (${to.id})');
+          // ตรวจสอบว่าเชื่อมต่ออยู่จริงหรือไม่
+          if (!_connected.containsKey(to.id)) {
+            print('❌ ไม่ได้เชื่อมต่อกับ ${to.name} (${to.id})');
+            print('   รายการที่เชื่อมต่อ: ${_connected.keys.toList()}');
+            throw Exception('Not connected to ${to.name}');
+          }
+          
+          print('📤 ส่ง$fileType ไปยัง: ${to.name} (${to.id})');
+          print('   Connected: ${_connected.containsKey(to.id)}');
           await Nearby().sendBytesPayload(to.id, payload);
+          print('✅ sendBytesPayload เสร็จสิ้น');
         } else {
-          print('📡 Broadcast รูปภาพไปยัง ${_connected.length} อุปกรณ์');
+          print('📡 Broadcast $fileType ไปยัง ${_connected.length} อุปกรณ์');
           for (final id in _connected.keys) {
             await Nearby().sendBytesPayload(id, payload);
           }
@@ -619,18 +732,29 @@ class NearbyTransport implements Transport {
         // ไฟล์ใหญ่ - ใช้ sendFilePayload
         print('📦 ส่งแบบ file payload (ไฟล์ใหญ่)');
         
+        // ⚠️ ส่งข้อความบอกประเภทไฟล์ก่อน (สำหรับไฟล์ใหญ่)
+        final fileName = file.uri.pathSegments.last;
+        final metadataMessage = 'FILE_METADATA:${isVideo ? "VIDEO" : "IMAGE"}:$fileName';
+        final metadataBytes = Uint8List.fromList(utf8.encode(metadataMessage));
+        
         if (to != null) {
-          print('📤 ส่งไฟล์ไปยัง: ${to.name} (${to.id})');
+          print('📤 ส่ง metadata ไปยัง: ${to.name}');
+          await Nearby().sendBytesPayload(to.id, metadataBytes);
+          await Future.delayed(const Duration(milliseconds: 200)); // รอให้ส่ง metadata ก่อน
+          
+          print('📤 ส่ง$fileType ไปยัง: ${to.name} (${to.id})');
           await Nearby().sendFilePayload(to.id, filePath);
         } else {
-          print('📡 Broadcast ไฟล์ไปยัง ${_connected.length} อุปกรณ์');
+          print('📡 Broadcast metadata และ$fileType ไปยัง ${_connected.length} อุปกรณ์');
           for (final id in _connected.keys) {
+            await Nearby().sendBytesPayload(id, metadataBytes);
+            await Future.delayed(const Duration(milliseconds: 200));
             await Nearby().sendFilePayload(id, filePath);
           }
         }
       }
       
-      print('✅ ส่งรูปภาพสำเร็จ');
+      print('✅ ส่ง$fileType สำเร็จ');
     } catch (e, stackTrace) {
       print('❌ ส่งไฟล์ล้มเหลว: $e');
       print('Stack trace: $stackTrace');
@@ -714,12 +838,15 @@ class NearbyTransport implements Transport {
   /// 🆕 บันทึกรูปภาพที่ได้รับเป็น bytes
   Future<void> _saveReceivedImage(Uint8List imageBytes, String originalFileName, String fromPeerId) async {
     try {
+      print('💾 กำลังบันทึกรูปภาพ: $originalFileName (${imageBytes.length} bytes)');
+      
       // สร้างโฟลเดอร์เก็บรูปภาพ
       final appDir = await getApplicationDocumentsDirectory();
       final imageDir = Directory('${appDir.path}/received_images');
       
       if (!await imageDir.exists()) {
         await imageDir.create(recursive: true);
+        print('📁 สร้างโฟลเดอร์: ${imageDir.path}');
       }
       
       // สร้างชื่อไฟล์ใหม่
@@ -729,6 +856,8 @@ class NearbyTransport implements Transport {
           : '.jpg';
       final newFileName = 'image_$timestamp$extension';
       final filePath = '${imageDir.path}/$newFileName';
+      
+      print('📝 บันทึกไปที่: $filePath');
       
       // บันทึกไฟล์
       final file = File(filePath);
@@ -747,24 +876,77 @@ class NearbyTransport implements Transport {
     }
   }
 
+  /// 🆕 บันทึกวิดีโอที่ได้รับเป็น bytes
+  Future<void> _saveReceivedVideo(Uint8List videoBytes, String originalFileName, String fromPeerId) async {
+    try {
+      // สร้างโฟลเดอร์เก็บวิดีโอ
+      final appDir = await getApplicationDocumentsDirectory();
+      final videoDir = Directory('${appDir.path}/received_videos');
+      
+      if (!await videoDir.exists()) {
+        await videoDir.create(recursive: true);
+      }
+      
+      // สร้างชื่อไฟล์ใหม่
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final extension = originalFileName.contains('.') 
+          ? originalFileName.substring(originalFileName.lastIndexOf('.'))
+          : '.mp4';
+      final newFileName = 'video_$timestamp$extension';
+      final filePath = '${videoDir.path}/$newFileName';
+      
+      // บันทึกไฟล์
+      final file = File(filePath);
+      await file.writeAsBytes(videoBytes);
+      
+      print('✅ บันทึกวิดีโอสำเร็จ: $filePath (${videoBytes.length} bytes)');
+      
+      // ส่ง event ว่าได้รับวิดีโอแล้ว
+      _fileCtrl.add(ReceivedFile(
+        fromPeerId: fromPeerId,
+        filePath: filePath,
+        time: DateTime.now(),
+      ));
+    } catch (e) {
+      print('❌ บันทึกวิดีโอล้มเหลว: $e');
+    }
+  }
+
   /// 🆕 Copy ไฟล์จาก Content URI ไปเก็บถาวรใน App Directory  
-  Future<String> _copyFileToPermanentStorage(String contentUri) async {
+  Future<String> _copyFileToPermanentStorage(String contentUri, {String? fileType}) async {
     try {
       print('📋 กำลังคัดลอกไฟล์: $contentUri');
+      print('📋 File type from metadata: $fileType');
       
-      // สร้างโฟลเดอร์เก็บรูปภาพใน App Directory
+      // ตรวจสอบประเภทไฟล์:
+      // 1. ใช้ fileType จาก metadata ก่อน (สำหรับไฟล์ใหญ่)
+      // 2. ถ้าไม่มี ตรวจสอบจาก URI/extension
+      bool isVideo;
+      if (fileType != null) {
+        isVideo = fileType == 'VIDEO';
+        print('✅ ใช้ประเภทไฟล์จาก metadata: ${isVideo ? "วิดีโอ" : "รูปภาพ"}');
+      } else {
+        isVideo = contentUri.toLowerCase().contains('.mp4') || 
+                  contentUri.toLowerCase().contains('.mov') ||
+                  contentUri.toLowerCase().contains('video');
+        print('⚠️ ไม่มี metadata, ตรวจสอบจาก URI: ${isVideo ? "วิดีโอ" : "รูปภาพ"}');
+      }
+      
+      // สร้างโฟลเดอร์เก็บไฟล์ใน App Directory
       final appDir = await getApplicationDocumentsDirectory();
-      final imageDir = Directory('${appDir.path}/received_images');
+      final fileDir = Directory('${appDir.path}/${isVideo ? "received_videos" : "received_images"}');
       
-      if (!await imageDir.exists()) {
-        await imageDir.create(recursive: true);
-        print('📁 สร้างโฟลเดอร์: ${imageDir.path}');
+      if (!await fileDir.exists()) {
+        await fileDir.create(recursive: true);
+        print('📁 สร้างโฟลเดอร์: ${fileDir.path}');
       }
       
       // สร้างชื่อไฟล์ปลายทาง
       final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final newFileName = 'image_$timestamp.jpg';
-      final destinationPath = '${imageDir.path}/$newFileName';
+      final extension = isVideo ? '.mp4' : '.jpg';
+      final prefix = isVideo ? 'video' : 'image';
+      final newFileName = '${prefix}_$timestamp$extension';
+      final destinationPath = '${fileDir.path}/$newFileName';
       
       // ลอง copy ไฟล์จาก content URI
       final uri = Uri.parse(contentUri);

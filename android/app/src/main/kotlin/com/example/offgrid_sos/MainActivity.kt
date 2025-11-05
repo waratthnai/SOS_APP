@@ -4,11 +4,14 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.EventChannel
+import android.net.Uri
+import java.io.ByteArrayOutputStream
 
 class MainActivity: FlutterActivity() {
     private val CHANNEL = "wifi_direct"
     private val PERMISSION_CHANNEL = "nearby_permissions"
     private val EVENT_CHANNEL = "wifi_direct/events"
+    private val FILE_CHANNEL = "com.example.offgrid_sos/files"
     private lateinit var wifiDirectChannel: WifiDirectChannel
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -25,6 +28,38 @@ class MainActivity: FlutterActivity() {
                 "requestNearbyWifiPermission" -> {
                     PermissionHelper.requestNearbyWifiDevicesPermission(this)
                     result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // File channel for reading Content URIs
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, FILE_CHANNEL).setMethodCallHandler {
+            call, result ->
+            when (call.method) {
+                "readContentUri" -> {
+                    val uriString = call.arguments as? String
+                    if (uriString != null) {
+                        try {
+                            val uri = Uri.parse(uriString)
+                            val inputStream = contentResolver.openInputStream(uri)
+                            val buffer = ByteArrayOutputStream()
+                            
+                            inputStream?.use { input ->
+                                val data = ByteArray(8192)
+                                var count: Int
+                                while (input.read(data).also { count = it } != -1) {
+                                    buffer.write(data, 0, count)
+                                }
+                            }
+                            
+                            result.success(buffer.toByteArray())
+                        } catch (e: Exception) {
+                            result.error("READ_ERROR", "Failed to read content URI: ${e.message}", null)
+                        }
+                    } else {
+                        result.error("INVALID_ARGUMENT", "URI string is null", null)
+                    }
                 }
                 else -> result.notImplemented()
             }
