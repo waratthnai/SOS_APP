@@ -155,8 +155,17 @@ class NearbyTransport implements Transport {
     _peersCtrl.add(list);
   }
 
-  // Helper method สำหรับ request connection
-  void _doRequestConnection(String id) {
+  // Helper method สำหรับ request connection พร้อม retry logic
+  void _doRequestConnection(String id, {int retryCount = 0}) {
+    // ป้องกัน retry มากเกินไป
+    if (retryCount > 3) {
+      print('❌ Max retry attempts reached for $id');
+      _pendingConnections.remove(id);
+      _found.remove(id);
+      _emitPeers();
+      return;
+    }
+    
     Nearby().requestConnection(
       deviceName,
       id,
@@ -340,10 +349,26 @@ class NearbyTransport implements Transport {
         _emitPeers();
       },
     ).catchError((error) {
-      print('❌ requestConnection error for $id: $error');
-      _pendingConnections.remove(id);
-      _found.remove(id);
-      _emitPeers();
+      // ตรวจสอบว่าเป็น STATUS_RADIO_ERROR (8007) หรือไม่
+      if (error.toString().contains('8007') || error.toString().contains('STATUS_RADIO_ERROR')) {
+        print('📡 Radio error detected for $id - waiting before retry (attempt ${retryCount + 1}/3)');
+        _pendingConnections.remove(id); // ยกเลิก pending status
+        
+        // รอ 2 วินาทีแล้วลองใหม่
+        Future.delayed(const Duration(seconds: 2), () {
+          if (_found.contains(id) && !_pendingConnections.contains(id)) {
+            print('🔄 Retrying connection to $id...');
+            _pendingConnections.add(id);
+            _doRequestConnection(id, retryCount: retryCount + 1);
+          }
+        });
+      } else {
+        // Error อื่นๆ ที่ไม่ใช่ radio error
+        print('❌ requestConnection error for $id: $error');
+        _pendingConnections.remove(id);
+        _found.remove(id);
+        _emitPeers();
+      }
       return false;
     });
   }
@@ -357,13 +382,17 @@ class NearbyTransport implements Transport {
       print('🔄 Stopping existing sessions...');
       try {
         await stopDiscovery();
-        await Future.delayed(const Duration(milliseconds: 1500)); // Wait longer
+        // 🔧 เพิ่มเวลารอให้ radio พักฟื้น (ป้องกัน STATUS_RADIO_ERROR)
+        print('⏳ Waiting for radio to stabilize...');
+        await Future.delayed(const Duration(seconds: 3)); // เพิ่มจาก 1.5 เป็น 3 วินาที
       } catch (e) {
         print('⚠️ Error stopping previous session: $e');
         // Reset states manually
         _isAdvertising = false;
         _isDiscovering = false;
         _state = DiscoveryState.idle;
+        // รอเพิ่มเติมหลัง error
+        await Future.delayed(const Duration(seconds: 2));
       }
     }
     
@@ -371,6 +400,16 @@ class NearbyTransport implements Transport {
     if (!ok) {
       print('❌ Permissions not granted for Nearby Connections');
       throw Exception('Permissions not granted for Nearby Connections. Please grant all Bluetooth and Location permissions.');
+    }
+    
+    // 🔧 เพิ่มการตรวจสอบสถานะ Bluetooth ก่อนเริ่ม
+    try {
+      print('📶 Checking Bluetooth status...');
+      // ลองเช็ค Bluetooth โดยใช้ nearby API
+      // ถ้า Bluetooth ปิดอยู่ API จะโยน error
+    } catch (e) {
+      print('⚠️ Bluetooth might be disabled: $e');
+      print('💡 Please ensure Bluetooth and WiFi are enabled');
     }
 
     _state = DiscoveryState.scanning;

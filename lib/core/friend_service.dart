@@ -141,6 +141,8 @@ class FriendService extends ChangeNotifier {
         try {
           await firebaseService.saveFullUserProfile(_currentUser!);
           debugPrint('[FriendService] ☁️ บันทึกโปรไฟล์ขึ้น Firebase แล้ว');
+          
+          // AppState จะฟังการเปลี่ยนแปลงและโหลดแชทเอง
         } catch (e) {
           debugPrint('[FriendService] ⚠️ Error saving to Firebase: $e');
         }

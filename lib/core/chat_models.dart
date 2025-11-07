@@ -27,6 +27,7 @@ enum MessageStatus {
 class ChatMessage {
   final String id;
   final String from; // 'me' หรือ peerId
+  final String? receiver; // ผู้รับ (peer ID) - สำหรับกรองแชทแยกห้อง
   final ChatType type;
   final String? text;
   final String? filePath; // path ของรูป/วิดีโอในเครื่อง
@@ -37,6 +38,7 @@ class ChatMessage {
   ChatMessage({
     required this.id,
     required this.from,
+    this.receiver, // ทำเป็น optional
     required this.type,
     this.text,
     this.filePath,
@@ -50,6 +52,7 @@ class ChatMessage {
     return {
       'id': id,
       'from': from,
+      'receiver': receiver,
       'type': type.toString().split('.').last,
       'text': text,
       'filePath': filePath,
@@ -89,6 +92,7 @@ class ChatMessage {
     return ChatMessage(
       id: json['id'] as String,
       from: json['from'] as String,
+      receiver: json['receiver'] as String?,
       type: ChatType.values.firstWhere(
         (e) => e.toString().split('.').last == json['type'],
       ),
@@ -109,6 +113,7 @@ class ChatMessage {
   ChatMessage copyWith({
     String? id,
     String? from,
+    String? receiver,
     ChatType? type,
     String? text,
     String? filePath,
@@ -119,6 +124,7 @@ class ChatMessage {
     return ChatMessage(
       id: id ?? this.id,
       from: from ?? this.from,
+      receiver: receiver ?? this.receiver,
       type: type ?? this.type,
       text: text ?? this.text,
       filePath: filePath ?? this.filePath,

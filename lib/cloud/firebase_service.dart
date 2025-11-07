@@ -523,6 +523,102 @@ class FirebaseService extends ChangeNotifier {
     }
   }
 
+  // ========== Chat Sync Management ==========
+
+  /// 💾 บันทึกข้อความแชทขึ้น Firebase (จาก local)
+  Future<bool> syncChatMessageToCloud(Map<String, dynamic> message) async {
+    if (_db == null || _user == null) return false;
+    try {
+      await _db!.collection('users').doc(_user!.uid).collection('chats').doc(message['id']).set({
+        ...message,
+        'userId': _user!.uid,
+        'syncedAt': FieldValue.serverTimestamp(),
+      });
+      debugPrint('[Firebase] ✅ Saved chat message: ${message['id']}');
+      return true;
+    } catch (e) {
+      debugPrint('[Firebase] ❌ Error saving chat message: $e');
+      return false;
+    }
+  }
+
+  /// 📥 ดึงข้อความแชททั้งหมดของ user จาก Firebase
+  Future<List<Map<String, dynamic>>> getUserChatMessages() async {
+    if (_db == null || _user == null) return [];
+    try {
+      final snapshot = await _db!
+          .collection('users')
+          .doc(_user!.uid)
+          .collection('chats')
+          .orderBy('time', descending: false)
+          .get();
+      
+      final messages = snapshot.docs.map((doc) => doc.data()).toList();
+      debugPrint('[Firebase] 📥 Fetched ${messages.length} chat messages');
+      return messages;
+    } catch (e) {
+      debugPrint('[Firebase] ❌ Error fetching user chat messages: $e');
+      return [];
+    }
+  }
+
+  /// 🔄 Sync ข้อความที่ pending ขึ้น Firebase
+  Future<int> syncPendingMessages(List<Map<String, dynamic>> pendingMessages) async {
+    if (_db == null || _user == null) return 0;
+    
+    int syncedCount = 0;
+    for (final msg in pendingMessages) {
+      final success = await syncChatMessageToCloud(msg);
+      if (success) syncedCount++;
+    }
+    
+    debugPrint('[Firebase] 🔄 Synced $syncedCount/${pendingMessages.length} messages');
+    return syncedCount;
+  }
+
+  /// 🗑️ ลบข้อความเดียวจาก Firebase
+  Future<bool> deleteChatMessage(String userId, String messageId) async {
+    if (_db == null) return false;
+    try {
+      await _db!
+          .collection('users')
+          .doc(userId)
+          .collection('chats')
+          .doc(messageId)
+          .delete();
+      
+      debugPrint('[Firebase] 🗑️ Deleted message: $messageId');
+      return true;
+    } catch (e) {
+      debugPrint('[Firebase] ❌ Error deleting message: $e');
+      return false;
+    }
+  }
+
+  /// 🗑️ ลบข้อความแชททั้งหมดของ user จาก Firebase
+  Future<bool> clearUserChatMessages() async {
+    if (_db == null || _user == null) return false;
+    try {
+      final snapshot = await _db!
+          .collection('users')
+          .doc(_user!.uid)
+          .collection('chats')
+          .get();
+      
+      final batch = _db!.batch();
+      for (final doc in snapshot.docs) {
+        batch.delete(doc.reference);
+      }
+      await batch.commit();
+      
+      debugPrint('[Firebase] 🗑️ Cleared all user chat messages');
+      return true;
+    } catch (e) {
+      debugPrint('[Firebase] ❌ Error clearing chat messages: $e');
+      return false;
+    }
+  }
+
   @override
   void dispose() {
     _connSub?.cancel();

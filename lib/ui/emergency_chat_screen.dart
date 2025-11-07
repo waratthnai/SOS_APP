@@ -4,9 +4,14 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:video_player/video_player.dart';
+import 'package:geolocator/geolocator.dart'; // สำหรับคำนวณระยะทาง
 import '../core/transport.dart';
 import '../core/chat_models.dart';
+import '../core/chat_db.dart'; // สำหรับบันทึกชื่อ peer
 import '../core/app_state.dart';
+import '../core/device_id_manager.dart'; // สำหรับ Device ID
+import '../core/friend_service.dart'; // สำหรับ friendService
+import '../widgets/message_status_icon.dart';
 
 /// หน้าแชทฉุกเฉินสำหรับอุปกรณ์ที่สแกนเจอ
 /// ใช้ Nearby Connections แทน Firebase
@@ -57,10 +62,40 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
     final text = _messageController.text.trim();
     if (text.isEmpty) return;
 
+    // ตรวจสอบว่าเชื่อมต่อกับ peer หรือไม่
+    final isConnected = appState.peers.any((p) => p.id == widget.peer.id);
+    
+    if (!isConnected) {
+      // ถ้าไม่ได้เชื่อมต่อ แสดงข้อความแจ้งเตือน
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.warning_amber_rounded, color: Colors.white),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'ไม่สามารถส่งข้อความได้ เนื่องจากไม่ได้เชื่อมต่อกับ ${widget.peer.name}\n'
+                    'ข้อความจะถูกบันทึกและส่งเมื่อเชื่อมต่อใหม่',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: Colors.orange,
+            duration: const Duration(seconds: 4),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+
     _messageController.clear();
     
     // ส่งข้อความผ่าน sendChatText แทนที่จะใช้ send โดยตรง
     // เพื่อให้การเพิ่มข้อความและ notification ทำงานถูกต้อง
+    // ข้อความจะถูกบันทึกเป็น 'pending' ถ้าไม่ได้เชื่อมต่อ
     appState.sendChatText(text, receiverId: widget.peer.id);
     
     _scrollToBottom();
@@ -111,6 +146,22 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
 
   // 📤 ส่งวิดีโอผ่าน Nearby Connections
   Future<void> _sendVideo(File videoFile) async {
+    // ตรวจสอบการเชื่อมต่อ
+    final isConnected = appState.peers.any((p) => p.id == widget.peer.id);
+    
+    if (!isConnected) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ ไม่สามารถส่งวิดีโอได้ เนื่องจากไม่ได้เชื่อมต่อกับ ${widget.peer.name}'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+      return;
+    }
+    
     try {
       // แสดง loading
       if (mounted) {
@@ -119,8 +170,11 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
         );
       }
 
+      // 💾 บันทึกชื่อ peer ก่อนส่ง
+      ChatDB.savePeerName(widget.peer.id, widget.peer.name);
+
       // 🆕 เพิ่มวิดีโอในแชทของตัวเองทันที (เพื่อให้เห็นว่าส่งไปแล้ว)
-      appState.addChatVideo(videoFile.path);
+      appState.addChatVideo(videoFile.path, receiverId: widget.peer.id);
 
       // ส่งไฟล์ผ่าน transport layer
       await appState.transport.sendFile(
@@ -146,6 +200,22 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
 
   // 📤 ส่งรูปภาพผ่าน Nearby Connections
   Future<void> _sendImage(File imageFile) async {
+    // ตรวจสอบการเชื่อมต่อ
+    final isConnected = appState.peers.any((p) => p.id == widget.peer.id);
+    
+    if (!isConnected) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ ไม่สามารถส่งรูปภาพได้ เนื่องจากไม่ได้เชื่อมต่อกับ ${widget.peer.name}'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+      return;
+    }
+    
     try {
       // ตรวจสอบขนาดไฟล์ก่อนส่ง
       final fileSize = await imageFile.length();
@@ -170,8 +240,11 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
         );
       }
 
+      // 💾 บันทึกชื่อ peer ก่อนส่ง
+      ChatDB.savePeerName(widget.peer.id, widget.peer.name);
+
       // 🆕 เพิ่มรูปภาพในแชทของตัวเองทันที (เพื่อให้เห็นว่าส่งไปแล้ว)
-      appState.addChatImage(imageFile.path);
+      appState.addChatImage(imageFile.path, receiverId: widget.peer.id);
 
       // ส่งไฟล์ผ่าน transport layer
       await appState.transport.sendFile(
@@ -297,24 +370,84 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
                       Icon(
                         Icons.circle,
                         size: 8,
-                        color: Colors.green,
+                        color: appState.peers.any((p) => p.id == widget.peer.id) 
+                            ? Colors.green 
+                            : Colors.grey,
                       ),
                       const SizedBox(width: 4),
                       Text(
-                        isSOSActive 
-                            ? 'ขอความช่วยเหลือ!'
-                            : isRescueActive
-                                ? 'หน่วยกู้ภัย'
-                                : 'เชื่อมต่อแล้ว',
+                        appState.peers.any((p) => p.id == widget.peer.id)
+                            ? (isSOSActive 
+                                ? 'ขอความช่วยเหลือ!'
+                                : isRescueActive
+                                    ? 'หน่วยกู้ภัย'
+                                    : 'เชื่อมต่อแล้ว')
+                            : 'ไม่ได้เชื่อมต่อ',
                         style: TextStyle(
                           fontSize: 12,
-                          color: isSOSActive 
-                              ? Colors.red
-                              : isRescueActive
-                                  ? Colors.blue
-                                  : Colors.green,
+                          color: appState.peers.any((p) => p.id == widget.peer.id)
+                              ? (isSOSActive 
+                                  ? Colors.red
+                                  : isRescueActive
+                                      ? Colors.blue
+                                      : Colors.green)
+                              : Colors.grey,
                           fontWeight: isSOSActive ? FontWeight.bold : FontWeight.normal,
                         ),
+                      ),
+                      // 📍 แสดงระยะห่าง
+                      StreamBuilder<Position>(
+                        stream: Geolocator.getPositionStream(
+                          locationSettings: const LocationSettings(
+                            accuracy: LocationAccuracy.high,
+                            distanceFilter: 1,
+                          ),
+                        ),
+                        builder: (context, snapshot) {
+                          if (!snapshot.hasData) return const SizedBox.shrink();
+                          
+                          final distance = appState.getDistanceToPeerSync(
+                            widget.peer.id, 
+                            snapshot.data,
+                          );
+                          
+                          if (distance == null) return const SizedBox.shrink();
+                          
+                          String distanceText;
+                          Color distanceColor;
+                          
+                          if (distance < 1000) {
+                            distanceText = '${distance.toStringAsFixed(0)} m';
+                            distanceColor = distance < 10 
+                                ? Colors.green 
+                                : distance < 50 
+                                    ? Colors.orange 
+                                    : Colors.grey;
+                          } else {
+                            distanceText = '${(distance / 1000).toStringAsFixed(2)} km';
+                            distanceColor = Colors.grey;
+                          }
+                          
+                          return Row(
+                            children: [
+                              const SizedBox(width: 8),
+                              Icon(
+                                Icons.my_location,
+                                size: 12,
+                                color: distanceColor,
+                              ),
+                              const SizedBox(width: 2),
+                              Text(
+                                distanceText,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: distanceColor,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          );
+                        },
                       ),
                     ],
                   ),
@@ -463,92 +596,121 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
   }
 
   Widget _buildMessagesList() {
-    return AnimatedBuilder(
-      animation: appState,
-      builder: (context, _) {
-        // ดึงข้อความจาก appState.chatMessages และกรองเฉพาะของ peer นี้
-        final allMessages = appState.chatMessages.where((msg) {
-          // แสดงข้อความที่เป็นของเรา หรือจาก peer นี้
-          return msg.from == 'me' || msg.from == widget.peer.id;
-        }).toList();
-        
-        // Filter messages based on search query
-        final messages = _searchQuery.isEmpty
-            ? allMessages
-            : allMessages.where((msg) {
-                if (msg.text != null) {
-                  return msg.text!.toLowerCase().contains(_searchQuery);
-                }
-                return false;
-              }).toList();
-        
-        if (allMessages.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  Icons.chat_bubble_outline,
-                  size: 64,
-                  color: Theme.of(context).colorScheme.onBackground.withOpacity(0.5),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'เริ่มต้นการสนทนาฉุกเฉิน',
-                  style: TextStyle(
-                    fontSize: 18,
-                    color: Theme.of(context).colorScheme.onBackground.withOpacity(0.7),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'ส่งข้อความฉุกเฉินให้ ${widget.peer.name.isNotEmpty ? widget.peer.name : "อุปกรณ์นี้"}',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Theme.of(context).colorScheme.onBackground.withOpacity(0.5),
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-              ],
-            ),
-          );
+    return FutureBuilder<String>(
+      future: DeviceIdManager.getCurrentId(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
         }
         
-        if (messages.isEmpty && _searchQuery.isNotEmpty) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  Icons.search_off,
-                  size: 64,
-                  color: Theme.of(context).colorScheme.onBackground.withOpacity(0.5),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'ไม่พบข้อความที่ค้นหา',
-                  style: TextStyle(
-                    fontSize: 18,
-                    color: Theme.of(context).colorScheme.onBackground.withOpacity(0.7),
-                  ),
-                ),
-              ],
-            ),
-          );
-        }
-
-        return ListView.builder(
-          controller: _scrollController,
-          padding: const EdgeInsets.all(16),
-          itemCount: messages.length,
-          itemBuilder: (context, index) {
-            final message = messages[index];
-            final isFromMe = message.from == 'me';
+        final myDeviceId = snapshot.data!;
+        final userId = friendService.currentUser?.id ?? 'anonymous';
+        
+        return AnimatedBuilder(
+          animation: appState,
+          builder: (context, _) {
+            // ดึงข้อความจาก appState.chatMessages และกรองเฉพาะของ peer นี้
+            final allMessages = appState.chatMessages.where((msg) {
+              // แสดงข้อความที่:
+              // 1. เราส่งถึง peer นี้ (from = myDeviceId/userId/'me' AND receiver = widget.peer.id)
+              // 2. peer นี้ส่งมาหาเรา (from = widget.peer.id AND receiver = myDeviceId/userId/'me')
+              final isFromMe = msg.from == myDeviceId || 
+                               msg.from == userId || 
+                               msg.from == 'me';
+              final isFromPeer = msg.from == widget.peer.id;
+              final isToPeer = msg.receiver == widget.peer.id;
+              final isToMe = msg.receiver == myDeviceId || 
+                            msg.receiver == userId || 
+                            msg.receiver == 'me';
+              
+              // ข้อความต้องเป็น 1 ใน 2 กรณี:
+              // - เราส่งถึง peer นี้
+              // - peer นี้ส่งมาหาเรา
+              return (isFromMe && isToPeer) || (isFromPeer && isToMe);
+            }).toList();
             
-            return _MessageBubble(
-              message: message,
-              isFromMe: isFromMe,
-              peerName: widget.peer.name,
+            // Filter messages based on search query
+            final messages = _searchQuery.isEmpty
+                ? allMessages
+                : allMessages.where((msg) {
+                    if (msg.text != null) {
+                      return msg.text!.toLowerCase().contains(_searchQuery);
+                    }
+                    return false;
+                  }).toList();
+            
+            if (allMessages.isEmpty) {
+              return Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.chat_bubble_outline,
+                      size: 64,
+                      color: Theme.of(context).colorScheme.onBackground.withOpacity(0.5),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'เริ่มต้นการสนทนาฉุกเฉิน',
+                      style: TextStyle(
+                        fontSize: 18,
+                        color: Theme.of(context).colorScheme.onBackground.withOpacity(0.7),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'ส่งข้อความฉุกเฉินให้ ${widget.peer.name.isNotEmpty ? widget.peer.name : "อุปกรณ์นี้"}',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Theme.of(context).colorScheme.onBackground.withOpacity(0.5),
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              );
+            }
+            
+            if (messages.isEmpty && _searchQuery.isNotEmpty) {
+              return Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.search_off,
+                      size: 64,
+                      color: Theme.of(context).colorScheme.onBackground.withOpacity(0.5),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'ไม่พบข้อความที่ค้นหา',
+                      style: TextStyle(
+                        fontSize: 18,
+                        color: Theme.of(context).colorScheme.onBackground.withOpacity(0.7),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }
+
+            return ListView.builder(
+              controller: _scrollController,
+              padding: const EdgeInsets.all(16),
+              itemCount: messages.length,
+              itemBuilder: (context, index) {
+                final message = messages[index];
+                // เช็คว่าข้อความนี้เป็นของเราหรือไม่
+                final isFromMe = message.from == myDeviceId || 
+                                 message.from == userId || 
+                                 message.from == 'me';
+                
+                return _MessageBubble(
+                  message: message,
+                  isFromMe: isFromMe,
+                  peerName: widget.peer.name,
+                );
+              },
             );
           },
         );
@@ -678,35 +840,68 @@ class _MessageBubble extends StatelessWidget {
             const SizedBox(width: 8),
           ],
           Flexible(
-            child: Column(
-              crossAxisAlignment: isFromMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-              children: [
-                if (!isFromMe)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 12, bottom: 4),
-                    child: Text(
-                      peerName.isNotEmpty ? peerName : 'อุปกรณ์ฉุกเฉิน',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: cs.onSurface.withOpacity(0.6),
-                        fontWeight: FontWeight.w500,
+            child: GestureDetector(
+              // 🗑️ กดค้างเพื่อลบข้อความ
+              onLongPress: () {
+                showDialog(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: const Text('ลบข้อความ'),
+                    content: const Text('คุณต้องการลบข้อความนี้หรือไม่?'),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('ยกเลิก'),
+                      ),
+                      TextButton(
+                        onPressed: () async {
+                          Navigator.pop(context);
+                          // ลบข้อความ
+                          await appState.deleteMessage(message.id);
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('✅ ลบข้อความแล้ว'),
+                                duration: Duration(seconds: 1),
+                              ),
+                            );
+                          }
+                        },
+                        child: const Text('ลบ', style: TextStyle(color: Colors.red)),
+                      ),
+                    ],
+                  ),
+                );
+              },
+              child: Column(
+                crossAxisAlignment: isFromMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                children: [
+                  if (!isFromMe)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 12, bottom: 4),
+                      child: Text(
+                        peerName.isNotEmpty ? peerName : 'อุปกรณ์ฉุกเฉิน',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: cs.onSurface.withOpacity(0.6),
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
                     ),
-                  ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: isFromMe 
-                        ? Colors.red 
-                        : cs.surfaceVariant,
-                    borderRadius: BorderRadius.circular(18).copyWith(
-                      bottomRight: isFromMe ? const Radius.circular(4) : null,
-                      bottomLeft: !isFromMe ? const Radius.circular(4) : null,
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: isFromMe 
+                          ? Colors.red 
+                          : cs.surfaceVariant,
+                      borderRadius: BorderRadius.circular(18).copyWith(
+                        bottomRight: isFromMe ? const Radius.circular(4) : null,
+                        bottomLeft: !isFromMe ? const Radius.circular(4) : null,
+                      ),
                     ),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
                       // 📷 แสดงรูปภาพ (ถ้ามี)
                       if (message.hasImage && message.filePath != null) ...[
                         ClipRRect(
@@ -772,7 +967,7 @@ class _MessageBubble extends StatelessWidget {
                           // 📊 แสดงสถานะข้อความ (สำหรับข้อความที่เราส่ง)
                           if (isFromMe) ...[
                             const SizedBox(width: 4),
-                            _MessageStatusIcon(status: message.status),
+                            MessageStatusIcon(status: message.status, size: 12),
                           ],
                         ],
                       ),
@@ -782,6 +977,7 @@ class _MessageBubble extends StatelessWidget {
               ],
             ),
           ),
+          ),
           if (isFromMe) const SizedBox(width: 8),
         ],
       ),
@@ -790,40 +986,6 @@ class _MessageBubble extends StatelessWidget {
 }
 
 /// 📊 Widget แสดงสถานะข้อความ (checkmarks)
-class _MessageStatusIcon extends StatelessWidget {
-  final MessageStatus status;
-  
-  const _MessageStatusIcon({required this.status});
-  
-  @override
-  Widget build(BuildContext context) {
-    Color iconColor = Colors.white.withOpacity(0.7);
-    IconData icon;
-    
-    switch (status) {
-      case MessageStatus.pending:
-        icon = Icons.access_time; // ⏳ รอส่ง
-        break;
-      case MessageStatus.sent:
-        icon = Icons.check; // ✓ ส่งแล้ว
-        break;
-      case MessageStatus.delivered:
-        icon = Icons.done_all; // ✓✓ ส่งถึงแล้ว
-        break;
-      case MessageStatus.synced:
-        icon = Icons.cloud_done; // ☁️✓ ซิงก์แล้ว
-        iconColor = Colors.lightGreenAccent;
-        break;
-    }
-    
-    return Icon(
-      icon,
-      size: 12,
-      color: iconColor,
-    );
-  }
-}
-
 // 🎬 Video Player Widget - แสดงวิดีโอในแชท
 class _VideoPlayerWidget extends StatefulWidget {
   final String videoPath;

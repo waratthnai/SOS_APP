@@ -16,6 +16,7 @@ import 'core/friend_service.dart';
 import 'ui/emergency_chat_screen.dart';
 import 'ui/device_name_setup_screen.dart';
 import 'ui/debug_screen.dart'; // เพิ่ม import หน้า Debug
+import 'ui/chat_history_screen.dart'; // เพิ่มสำหรับหน้าประวัติแชท
 import 'package:shared_preferences/shared_preferences.dart';
 
 bool dummySwitch1 = false;
@@ -150,7 +151,7 @@ class _RootNavState extends State<RootNav> {
   final _pages = [
     const HomeScreen(),
     const MapScreen(),
-    const NotificationsScreen(),
+    const ChatHistoryScreen(), // เปลี่ยนจาก NotificationsScreen เป็น ChatHistoryScreen
     const SettingsScreen(),
   ];
 
@@ -158,7 +159,7 @@ class _RootNavState extends State<RootNav> {
     _NavItem(icon: Icons.home, label: 'หน้าหลัก'),
     _NavItem(icon: Icons.map, label: 'แผนที่'),
     _NavItem(icon: Icons.warning_amber_rounded, label: 'SOS', isSOS: true),
-    _NavItem(icon: Icons.notifications, label: 'การแจ้งเตือน'),
+    _NavItem(icon: Icons.chat, label: 'แชท'), // เปลี่ยนจากการแจ้งเตือนเป็นแชท
     _NavItem(icon: Icons.settings, label: 'การตั้งค่า'),
   ];
 
@@ -565,6 +566,25 @@ class _HomeScreenState extends State<HomeScreen> {
         final cs = theme.colorScheme;
 
         return Scaffold(
+          appBar: AppBar(
+            title: const Text('หน้าหลัก'),
+            backgroundColor: cs.surface,
+            elevation: 0,
+            actions: [
+              // ปุ่มการแจ้งเตือน (ย้ายมาจากแท็บล่าง)
+              IconButton(
+                icon: const Icon(Icons.notifications),
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => const NotificationsScreen(),
+                    ),
+                  );
+                },
+                tooltip: 'การแจ้งเตือน',
+              ),
+            ],
+          ),
           body: Stack(
             children: [
               // Main content
@@ -989,6 +1009,80 @@ class _HomeScreenState extends State<HomeScreen> {
                                       fontWeight: FontWeight.bold,
                                     ),
                                   ),
+                                  const Spacer(),
+                                  // 🚑 จำนวนหน่วยกู้ภัย
+                                  if (peers.where((p) => appState.isPeerRescue(p.id)).isNotEmpty) ...[
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 6,
+                                        vertical: 2,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.blue.withOpacity(0.15),
+                                        borderRadius: BorderRadius.circular(12),
+                                        border: Border.all(
+                                          color: Colors.blue,
+                                          width: 1,
+                                        ),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(
+                                            Icons.local_hospital,
+                                            color: Colors.blue,
+                                            size: 12,
+                                          ),
+                                          const SizedBox(width: 3),
+                                          Text(
+                                            '${peers.where((p) => appState.isPeerRescue(p.id)).length}',
+                                            style: const TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.blue,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                  ],
+                                  // 🚨 จำนวนผู้ขอความช่วยเหลือ
+                                  if (peers.where((p) => appState.isSOSPeer(p.id)).isNotEmpty) ...[
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 6,
+                                        vertical: 2,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.red.withOpacity(0.15),
+                                        borderRadius: BorderRadius.circular(12),
+                                        border: Border.all(
+                                          color: Colors.red,
+                                          width: 1,
+                                        ),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(
+                                            Icons.warning_amber_rounded,
+                                            color: Colors.red,
+                                            size: 12,
+                                          ),
+                                          const SizedBox(width: 3),
+                                          Text(
+                                            '${peers.where((p) => appState.isSOSPeer(p.id)).length}',
+                                            style: const TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.red,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
                                 ],
                               ),
                               const SizedBox(height: 12),
@@ -1126,6 +1220,102 @@ class _HomeScreenState extends State<HomeScreen> {
                                                 fontSize: 12,
                                                 color: Colors.grey[600],
                                               ),
+                                            ),
+                                            // 📍 แสดงระยะห่าง (อัพเดททุก 5 วินาที)
+                                            StreamBuilder<Position>(
+                                              stream: Geolocator.getPositionStream(
+                                                locationSettings: const LocationSettings(
+                                                  accuracy: LocationAccuracy.best,
+                                                  distanceFilter: 1, // อัพเดทเมื่อเคลื่อนที่ 1 เมตร
+                                                ),
+                                              ),
+                                              builder: (context, snapshot) {
+                                                Position? myPosition;
+                                                
+                                                if (snapshot.hasData) {
+                                                  myPosition = snapshot.data;
+                                                } else {
+                                                  // Fallback: ถ้าไม่มี stream ให้แสดงข้อความรอ
+                                                  return Row(
+                                                    children: [
+                                                      const SizedBox(
+                                                        width: 10,
+                                                        height: 10,
+                                                        child: CircularProgressIndicator(strokeWidth: 2),
+                                                      ),
+                                                      const SizedBox(width: 4),
+                                                      Text(
+                                                        'กำลังหา GPS...',
+                                                        style: TextStyle(
+                                                          fontSize: 11,
+                                                          color: Colors.grey.shade600,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  );
+                                                }
+                                                
+                                                final distance = appState.getDistanceToPeerSync(p.id, myPosition);
+                                                
+                                                if (distance == null) {
+                                                  // แสดงว่ายังไม่ได้รับตำแหน่ง GPS ของ peer
+                                                  return Row(
+                                                    children: [
+                                                      Icon(
+                                                        Icons.location_off,
+                                                        size: 12,
+                                                        color: Colors.grey.shade400,
+                                                      ),
+                                                      const SizedBox(width: 4),
+                                                      Text(
+                                                        'ไม่มีตำแหน่ง',
+                                                        style: TextStyle(
+                                                          fontSize: 11,
+                                                          color: Colors.grey.shade400,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  );
+                                                }
+                                                
+                                                // แปลงหน่วย: < 1 km แสดงเป็นเมตร, >= 1 km แสดงเป็น km
+                                                String distanceText;
+                                                Color distanceColor;
+                                                
+                                                if (distance < 1000) {
+                                                  distanceText = '${distance.toStringAsFixed(0)} m';
+                                                  // สีเขียวถ้าใกล้มาก (< 10m), เหลืองถ้าปานกลาง, ส้มถ้าไกล
+                                                  if (distance < 10) {
+                                                    distanceColor = Colors.green.shade700;
+                                                  } else if (distance < 50) {
+                                                    distanceColor = Colors.orange.shade700;
+                                                  } else {
+                                                    distanceColor = Colors.grey.shade700;
+                                                  }
+                                                } else {
+                                                  distanceText = '${(distance / 1000).toStringAsFixed(2)} km';
+                                                  distanceColor = Colors.grey.shade700;
+                                                }
+                                                
+                                                return Row(
+                                                  children: [
+                                                    Icon(
+                                                      Icons.my_location,
+                                                      size: 12,
+                                                      color: distanceColor,
+                                                    ),
+                                                    const SizedBox(width: 4),
+                                                    Text(
+                                                      distanceText,
+                                                      style: TextStyle(
+                                                        fontSize: 11,
+                                                        color: distanceColor,
+                                                        fontWeight: FontWeight.w500,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                );
+                                              },
                                             ),
                                           ],
                                         ),

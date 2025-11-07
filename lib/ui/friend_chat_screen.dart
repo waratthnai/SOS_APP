@@ -9,6 +9,7 @@ import '../core/friend_models.dart';
 import '../core/chat_models.dart';
 import '../core/app_state.dart';
 import '../core/friend_service.dart';
+import '../widgets/message_status_icon.dart';
 
 class FriendChatScreen extends StatefulWidget {
   final Friend friend;
@@ -945,9 +946,14 @@ class _MessageBubble extends StatelessWidget {
                       ),
                       if (isFromMe) ...[
                         const SizedBox(width: 4),
-                        _MessageStatusIcon(
-                          isDelivered: message.isDelivered,
-                          isRead: message.isRead,
+                        MessageStatusIcon(
+                          // แปลง isDelivered/isRead เป็น MessageStatus
+                          status: message.isRead 
+                              ? MessageStatus.synced  // อ่านแล้ว = ซิงก์แล้ว
+                              : message.isDelivered 
+                                  ? MessageStatus.delivered  // ส่งถึงแล้ว
+                                  : MessageStatus.sent,  // ส่งแล้ว
+                          size: 12,
                         ),
                       ],
                     ],
@@ -976,41 +982,6 @@ class _MessageBubble extends StatelessWidget {
 }
 
 /// 📊 Widget แสดงสถานะข้อความสำหรับ Friend Chat
-class _MessageStatusIcon extends StatelessWidget {
-  final bool isDelivered;
-  final bool isRead;
-  
-  const _MessageStatusIcon({
-    required this.isDelivered,
-    required this.isRead,
-  });
-  
-  @override
-  Widget build(BuildContext context) {
-    IconData icon;
-    Color iconColor;
-    
-    if (!isDelivered) {
-      // ⏳ ค้างส่ง / กำลังส่ง
-      icon = Icons.access_time;
-      iconColor = Colors.grey;
-    } else if (!isRead) {
-      // ✓ ส่งแล้ว (ยังไม่อ่าน)
-      icon = Icons.done;
-      iconColor = Colors.grey;
-    } else {
-      // ✓✓ อ่านแล้ว
-      icon = Icons.done_all;
-      iconColor = Colors.blue;
-    }
-    
-    return Icon(
-      icon,
-      size: 14,
-      color: iconColor,
-    );
-  }
-}
 //  Video Player Widget - ???????????????
 class _VideoPlayerWidget extends StatefulWidget {
   final String videoPath;

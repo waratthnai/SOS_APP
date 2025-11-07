@@ -9,6 +9,7 @@ import 'transport.dart';
 import 'chat_models.dart';
 import '../cloud/firebase_service.dart';
 import 'nearby_transport.dart';
+import 'device_id_manager.dart'; // เพิ่มสำหรับ Device ID
 // import 'mock_transport.dart';
 import 'wifi_direct_transport.dart';
 import 'ble_transport.dart';
@@ -22,12 +23,49 @@ import '../ui/emergency_chat_screen.dart'; // เพิ่มสำหรับ�
 import '../ui/friend_chat_screen.dart'; // เพิ่มสำหรับเปิดหน้าแชทเพื่อน
 import '../main.dart'; // เพิ่มสำหรับ navigatorKey
 
+// 📍 Model สำหรับเก็บตำแหน่ง GPS ของ peer
+class PeerLocation {
+  final double latitude;
+  final double longitude;
+  final DateTime timestamp;
+
+  PeerLocation({
+    required this.latitude,
+    required this.longitude,
+    required this.timestamp,
+  });
+
+  @override
+  String toString() => '$latitude,$longitude,${timestamp.millisecondsSinceEpoch}';
+
+  factory PeerLocation.fromString(String str) {
+    final parts = str.split(',');
+    if (parts.length < 2) throw FormatException('Invalid location format');
+    return PeerLocation(
+      latitude: double.parse(parts[0]),
+      longitude: double.parse(parts[1]),
+      timestamp: parts.length >= 3 
+          ? DateTime.fromMillisecondsSinceEpoch(int.parse(parts[2]))
+          : DateTime.now(),
+    );
+  }
+}
+
 class AppState extends ChangeNotifier with WidgetsBindingObserver {
   Transport transport;
   String selectedProtocol = 'nearby';
   String _deviceName = 'My Device'; // เพิ่มตัวแปรเก็บชื่อเครื่อง
   Timer? _onlineStatusTimer; // Timer สำหรับอัปเดตสถานะออนไลน์
+  Timer? _locationBroadcastTimer; // Timer สำหรับส่ง GPS location
+  Timer? _keepAliveTimer; // 🔄 Timer สำหรับ keep alive
+  Timer? _reconnectTimer; // 🔁 Timer สำหรับ auto reconnect
   bool _isAppInForeground = true; // ติดตามสถานะแอพ
+  String? _lastSyncedUserId; // เก็บ userId ล่าสุดที่ซิงก์แล้ว เพื่อป้องกันซิงก์ซ้ำ
+  int _reconnectAttempts = 0; // 🔁 นับจำนวนครั้งที่พยายามเชื่อมต่อใหม่
+  static const int _maxReconnectAttempts = 5; // 🔁 จำนวนครั้งสูงสุด
+  
+  // 📍 GPS Locations ของ peers
+  final Map<String, PeerLocation> _peerLocations = {};
   
   // 🚑 โหมดหน่วยกู้ภัย (Rescue Mode)
   bool _isRescueMode = false;
@@ -197,6 +235,43 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> _initFriendService() async {
     await friendService.init();
+    
+    // ฟัง login event เพื่อ sync แชทจาก Firebase
+    friendService.addListener(_onFriendServiceChanged);
+  }
+
+  void _onFriendServiceChanged() async {
+    // ตรวจสอบว่า user login เข้ามาใหม่หรือไม่
+    if (friendService.currentUser != null) {
+      final currentUserId = friendService.currentUser!.id;
+      
+      // 🛡️ ป้องกันการซิงก์ซ้ำ - ถ้า userId เดิม ไม่ต้องทำอะไร
+      if (_lastSyncedUserId == currentUserId) {
+        debugPrint('[AppState] ⏭️ Skip - already synced for user: $currentUserId');
+        return;
+      }
+      
+      debugPrint('[AppState] 🔄 User login detected: ${friendService.currentUser!.name}');
+      
+      // 🔄 Migrate ข้อความ anonymous เป็น userId ปัจจุบัน (รอให้เสร็จก่อน)
+      debugPrint('[AppState] 🔄 Starting migration...');
+      await ChatDB.migrateAnonymousMessages(currentUserId);
+      
+      // โหลดข้อความ local ก่อน (ข้อความที่คุยกับ nearby peers)
+      debugPrint('[AppState] 📥 Loading local messages...');
+      await _loadLocalMessages();
+      
+      // จากนั้นโหลดจาก Firebase (ถ้า online)
+      if (firebaseService.isOnline) {
+        debugPrint('[AppState] 📥 Loading from Firebase...');
+        await _loadChatsFromFirebase();
+      }
+      
+      // 💾 บันทึก userId ที่ซิงก์แล้ว
+      _lastSyncedUserId = currentUserId;
+      
+      debugPrint('[AppState] ✅ Login sequence completed');
+    }
   }
 
   Future<void> switchTransport(String protocol) async {
@@ -227,11 +302,26 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   UnmodifiableListView<Message> get messages => UnmodifiableListView(_messages);
 
   void _subs() {
+    // เริ่ม broadcast GPS location ทุก 8 วินาที
+    _startLocationBroadcast();
+    
+    // 🔄 เริ่ม Keep Alive ทุก 30 วินาที
+    _startKeepAlive();
+    
+    // 🔁 ตรวจสอบการเชื่อมต่อและ reconnect ทุก 10 วินาที
+    _startConnectionMonitor();
+    
     transport.onPeers.listen((list) {
       final oldPeersCount = _peers.length;
       _peers
         ..clear()
         ..addAll(list);
+      
+      // 🔁 Reset reconnect attempts เมื่อมี peer เชื่อมต่อสำเร็จ
+      if (list.isNotEmpty && _reconnectAttempts > 0) {
+        _reconnectAttempts = 0;
+        debugPrint('✅ เชื่อมต่อสำเร็จ - Reset reconnect attempts');
+      }
       
       // 🔄 เมื่อมี peer ใหม่เชื่อมต่อ → ส่งสถานะโหมดปัจจุบันให้ peer รู้
       if (list.length > oldPeersCount) {
@@ -258,13 +348,25 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       
       notifyListeners();
     });
-    transport.onMessage.listen((m) {
+    transport.onMessage.listen((m) async { // เพิ่ม async
       debugPrint('📨 ได้รับข้อความจาก ${m.fromPeerId}: ${m.body}');
       debugPrint('🔍 [DEBUG] กำลังประมวลผลข้อความ...');
       
       // ⚠️ เปลี่ยนจาก: ต้องมี user ล็อกอินก่อน
       // เป็น: ถ้าไม่ได้ login ก็ใช้ anonymous ID
       final currentUserId = friendService.currentUser?.id ?? 'anonymous';
+      
+      // 💓 ตรวจสอบข้อความ Keep Alive (ไม่ต้องทำอะไร แค่รับรู้ว่ายังเชื่อมต่ออยู่)
+      if (m.body.startsWith('KEEP_ALIVE:')) {
+        debugPrint('💓 Keep Alive received from ${m.fromPeerId}');
+        return;
+      }
+      
+      // 📍 ตรวจสอบข้อความ GPS location (ต้องเช็คก่อนเพื่อไม่ให้บันทึกลง chat)
+      if (m.body.startsWith('GPS_LOC:')) {
+        _handleGPSLocation(m.body, m.fromPeerId);
+        return; // ❗ สำคัญ: return ทันทีเพื่อไม่ให้ไปบันทึกใน ChatMessage
+      }
       
       // 🚑 ตรวจสอบสถานะหน่วยกู้ภัย
       if (m.body.startsWith('RESCUE_STATUS:')) {
@@ -306,9 +408,18 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
           orElse: () => Peer(id: m.fromPeerId, name: 'Device', nearby: false),
         );
         
+        // 💾 บันทึกชื่อ peer เพื่อให้ห้องแชทคงชื่อไว้แม้ตัดการเชื่อมต่อ
+        if (peer.name.isNotEmpty) {
+          ChatDB.savePeerName(m.fromPeerId, peer.name);
+        }
+        
+        // ดึง Device ID ของเราเพื่อใช้เป็น receiver
+        final myDeviceId = await DeviceIdManager.getCurrentId();
+        
         final msg = ChatMessage(
           id: 'in_${_chatMessages.length + 1}',
           from: m.fromPeerId,
+          receiver: myDeviceId, // เพื่อนส่งมาหาเรา
           type: ChatType.text,
           text: m.body,
           time: DateTime.now(),
@@ -319,7 +430,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         _chatMessages.add(msg);
         
         // เก็บ local (ถ้า login แล้วก็เก็บด้วย userId, ถ้าไม่ก็เก็บด้วย anonymous)
-        ChatDB.insertMessage(msg, currentUserId, receiver: m.fromPeerId);
+        ChatDB.insertMessage(msg, currentUserId, receiver: myDeviceId);
         
         // แจ้งเตือนเมื่อรับข้อความใหม่ (ใช้ชื่อจริงของ peer)
         NotificationService().showMessageNotification(
@@ -341,7 +452,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     
     // 📁 รับไฟล์
     if (transport is NearbyTransport) {
-      (transport as NearbyTransport).onFileReceived.listen((file) {
+      (transport as NearbyTransport).onFileReceived.listen((file) async { // เพิ่ม async
         debugPrint('📁 ได้รับไฟล์จาก ${file.fromPeerId}: ${file.filePath}');
         
         final currentUserId = friendService.currentUser?.id ?? 'anonymous';
@@ -360,10 +471,14 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         
         debugPrint('📋 ไฟล์ประเภท: ${isVideo ? "วิดีโอ" : "รูปภาพ"}');
         
+        // ดึง Device ID ของเราเพื่อใช้เป็น receiver
+        final myDeviceId = await DeviceIdManager.getCurrentId();
+        
         // สร้าง ChatMessage สำหรับไฟล์ที่ได้รับ
         final msg = ChatMessage(
           id: 'file_${_chatMessages.length + 1}',
           from: file.fromPeerId,
+          receiver: myDeviceId, // เพื่อนส่งมาหาเรา
           type: isVideo ? ChatType.video : ChatType.image,
           filePath: file.filePath,
           time: file.time,
@@ -373,7 +488,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         _chatMessages.add(msg);
         
         // เก็บ local
-        ChatDB.insertMessage(msg, currentUserId, receiver: file.fromPeerId);
+        ChatDB.insertMessage(msg, currentUserId, receiver: myDeviceId);
         
         // แจ้งเตือน
         NotificationService().showMessageNotification(
@@ -441,17 +556,20 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     return await ChatDB.getConversation(friendService.currentUser!.id, peerId);
   }
 
-  void sendChatText(String text, {String? receiverId}) {
+  Future<void> sendChatText(String text, {String? receiverId}) async {
   // ถ้าไม่ได้ login ใช้ anonymous ID
   final currentUserId = friendService.currentUser?.id ?? 'anonymous';
-  final deviceName = _deviceName;
+  
+  // 🆔 ใช้ Device ID ถาวรแทน 'me' เพื่อให้สามารถหาแชทเดิมเจอ
+  final myDeviceId = await DeviceIdManager.getCurrentId();
   
   // สร้าง message ID ที่ unique
   final messageId = 'msg_${DateTime.now().millisecondsSinceEpoch}_$currentUserId';
   
   final msg = ChatMessage(
     id: messageId,
-    from: 'me',
+    from: myDeviceId, // ใช้ Device ID แทน 'me'
+    receiver: receiverId, // เพิ่ม receiver
     type: ChatType.text,
     text: text,
     time: DateTime.now(),
@@ -460,97 +578,161 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   );
   _chatMessages.add(msg);
   
-  // เก็บ local
-  ChatDB.insertMessage(msg, currentUserId, receiver: receiverId);
-  
-  // 🌐 ส่งข้อความแบบ Mesh ถ้ามีหลาย peers
-  if (_peers.length > 1) {
-    final relayMsg = 'RELAY:$messageId:5:$currentUserId:$deviceName:$text';
-    transport.sendMessage(relayMsg);
-    debugPrint('🌐 ส่งข้อความแบบ Mesh (TTL=5)');
-  } else {
-    // ส่งข้อความผ่าน Nearby Connections
-    final targetPeer = receiverId != null 
-        ? _peers.firstWhere((p) => p.id == receiverId, orElse: () => _peers.first)
-        : null;
-    transport.sendMessage(text, to: targetPeer);
-    debugPrint('📤 ส่งข้อความไปยัง: ${targetPeer?.name ?? "broadcast"}');
+  // กำหนด receiver: ถ้าไม่ได้ระบุ ให้ใช้ peer แรกที่เชื่อมต่ออยู่
+  String? actualReceiverId = receiverId;
+  if (actualReceiverId == null && _peers.isNotEmpty) {
+    actualReceiverId = _peers.first.id;
   }
   
-  // อัปเดตสถานะเป็น sent
+  // 💾 บันทึกชื่อ peer เพื่อให้ห้องแชทคงชื่อไว้
+  if (actualReceiverId != null) {
+    final targetPeer = _peers.firstWhere(
+      (p) => p.id == actualReceiverId,
+      orElse: () => Peer(id: '', name: ''),
+    );
+    if (targetPeer.id.isNotEmpty && targetPeer.name.isNotEmpty) {
+      ChatDB.savePeerName(actualReceiverId, targetPeer.name);
+    }
+  }
+  
+  // เก็บ local พร้อม receiver
+  if (actualReceiverId != null) {
+    ChatDB.insertMessage(msg, currentUserId, receiver: actualReceiverId);
+    debugPrint('💾 บันทึกข้อความ sender=$myDeviceId, receiver=$actualReceiverId');
+  }
+  
+  // 📤 ส่งข้อความแบบ Point-to-Point (เฉพาะคนที่เลือก)
+  final targetPeer = actualReceiverId != null 
+      ? _peers.firstWhere((p) => p.id == actualReceiverId, orElse: () => Peer(id: '', name: ''))
+      : null;
+  
+  if (targetPeer != null && targetPeer.id.isNotEmpty) {
+    transport.sendMessage(text, to: targetPeer);
+    debugPrint('📤 ส่งข้อความไปยัง: ${targetPeer.name} (${targetPeer.id})');
+  } else {
+    debugPrint('❌ ไม่พบ peer ที่ต้องการส่ง (receiverId=$actualReceiverId)');
+  }
+  
+  // อัปเดตสถานะเป็น sent หลังส่ง
   final index = _chatMessages.indexWhere((m) => m.id == messageId);
   if (index != -1) {
     _chatMessages[index] = msg.copyWith(status: MessageStatus.sent);
+    // อัปเดท database ด้วย
+    await ChatDB.updateMessageStatus(messageId, MessageStatus.sent);
   }
   
-  // บันทึกไปยัง Firebase (ถ้า login แล้ว)
-  if (friendService.currentUser != null) {
-    firebaseService.saveChatMessage(
-      type: 'text',
-      text: text,
-      time: msg.time,
-    ).then((_) {
-      // อัปเดตสถานะเป็น synced หลัง Firebase save สำเร็จ
-      final idx = _chatMessages.indexWhere((m) => m.id == messageId);
-      if (idx != -1) {
-        _chatMessages[idx] = _chatMessages[idx].copyWith(status: MessageStatus.synced);
-        notifyListeners();
-      }
-    });
+  debugPrint('✅ ส่งข้อความ: $text (สถานะ: sent)');
+  
+  // 🔄 Auto sync ขึ้น Firebase ถ้า online และ login แล้ว
+  if (firebaseService.isOnline && friendService.currentUser != null) {
+    await _autoSyncMessage(_chatMessages[index]);
   }
   
-  debugPrint('✅ ส่งข้อความ: $text (รวม ${_chatMessages.length} ข้อความ)');
   notifyListeners();
 }
 
-void addChatImage(String path) {
+/// 🔄 Auto sync ข้อความเดี่ยวขึ้น Firebase
+Future<void> _autoSyncMessage(ChatMessage msg) async {
+  try {
+    final messageMap = {
+      'id': msg.id,
+      'from': msg.from,
+      'type': msg.type.toString().split('.').last,
+      'text': msg.text,
+      'filePath': msg.filePath,
+      'time': msg.time.millisecondsSinceEpoch,
+      'isEmergency': msg.isEmergency,
+      'status': msg.status.toString().split('.').last,
+    };
+    
+    final success = await firebaseService.syncChatMessageToCloud(messageMap);
+    if (success) {
+      // อัพเดทสถานะเป็น synced
+      await ChatDB.updateMessageStatus(msg.id, MessageStatus.synced);
+      debugPrint('[AutoSync] ✅ Synced message: ${msg.id}');
+    }
+  } catch (e) {
+    debugPrint('[AutoSync] ❌ Error: $e');
+  }
+}
+
+void addChatImage(String path, {String? receiverId}) async {
   if (friendService.currentUser == null) return; // ต้อง login ก่อน
+  
+  final myDeviceId = await DeviceIdManager.getCurrentId();
   
   final msg = ChatMessage(
     id: 'me_${_chatMessages.length + 1}',
-    from: 'me',
+    from: myDeviceId,
+    receiver: receiverId,
     type: ChatType.image,
     filePath: path,
     time: DateTime.now(),
   );
   _chatMessages.add(msg);
-  ChatDB.insertMessage(msg, friendService.currentUser!.id); // เก็บ local พร้อม userId
+  ChatDB.insertMessage(msg, friendService.currentUser!.id, receiver: receiverId); // เก็บ local พร้อม userId
   firebaseService.saveChatMessage(
     type: 'image',
     text: '[image]',
     time: msg.time,
   );
+  
+  // 🔄 Auto sync
+  if (firebaseService.isOnline) {
+    _autoSyncMessage(msg);
+  }
+  
   notifyListeners();
 }
 
-void addChatVideo(String path) {
+void addChatVideo(String path, {String? receiverId}) async {
   if (friendService.currentUser == null) return; // ต้อง login ก่อน
+  
+  final myDeviceId = await DeviceIdManager.getCurrentId();
   
   final msg = ChatMessage(
     id: 'me_${_chatMessages.length + 1}',
-    from: 'me',
+    from: myDeviceId,
+    receiver: receiverId,
     type: ChatType.video,
     filePath: path,
     time: DateTime.now(),
   );
   _chatMessages.add(msg);
-  ChatDB.insertMessage(msg, friendService.currentUser!.id); // เก็บ local พร้อม userId
+  ChatDB.insertMessage(msg, friendService.currentUser!.id, receiver: receiverId); // เก็บ local พร้อม userId
   firebaseService.saveChatMessage(
     type: 'video',
     text: '[video]',
     time: msg.time,
   );
+  
+  // 🔄 Auto sync
+  if (firebaseService.isOnline) {
+    _autoSyncMessage(msg);
+  }
+  
   notifyListeners();
 }
 
   Future<void> _loadLocalMessages() async {
-    if (friendService.currentUser == null) return; // ต้อง login ก่อน
+    if (friendService.currentUser == null) {
+      debugPrint('[AppState] ⚠️ Cannot load messages: No user logged in');
+      return;
+    }
     
-    final local = await ChatDB.getMessages(friendService.currentUser!.id);
+    final userId = friendService.currentUser!.id;
+    debugPrint('[AppState] 📂 Loading messages for user: $userId');
+    
+    final local = await ChatDB.getMessages(userId);
+    debugPrint('[AppState] 📊 Found ${local.length} local messages');
+    
     _chatMessages
       ..clear()
       ..addAll(local);
+    
+    debugPrint('[AppState] ✅ Loaded ${_chatMessages.length} messages into memory');
     notifyListeners();
+    
     // sync firebase → local
     await syncFirebaseToLocal();
   }
@@ -1081,24 +1263,262 @@ void addChatVideo(String path) {
     // ยกเลิก timer อัปเดตสถานะออนไลน์
     _stopOnlineStatusUpdates();
     
+    // ยกเลิก GPS location broadcast
+    _stopLocationBroadcast();
+    
+    // ยกเลิก auto sync ของ FriendService
+    friendService.stopAutoSync();
+    
+    // 🔄 Sync แชทขึ้น Firebase ก่อน logout (ถ้า online)
+    if (friendService.currentUser != null && firebaseService.isOnline) {
+      debugPrint('[Logout] 🔄 Syncing chats to Firebase...');
+      await _syncChatsToFirebase();
+    }
+    
     // ตั้งสถานะออฟไลน์ก่อน logout
     if (friendService.currentUser != null) {
       await firebaseService.updateOnlineStatus(friendService.currentUser!.id, false);
       
-      // ลบข้อความทั่วไปของ user นี้จาก database
+      // ลบข้อความของ user ที่ login ออก (แต่เก็บข้อความ anonymous ไว้)
       await ChatDB.clearUserMessages(friendService.currentUser!.id);
+      debugPrint('[Logout] 🗑️ ลบข้อความของ user ${friendService.currentUser!.id} จาก local');
     }
+    
+    // 🔄 Reset sync flag เพื่อให้ login ครั้งต่อไปทำงานได้
+    _lastSyncedUserId = null;
+    debugPrint('[Logout] 🔄 Reset sync flag');
+    
+    // 🆔 Reset User ID ใน DeviceIdManager (กลับไปใช้ Device ID)
+    DeviceIdManager.setUserId(null);
+    debugPrint('[Logout] 🆔 Reset to device ID');
     
     // ล้างข้อมูลใน memory
     _chatMessages.clear();
     _friendChats.clear();
     _messages.clear();
-    _peers.clear();
+    // ไม่ลบ _peers เพื่อให้ยังคุยกับ nearby peers ได้
     
     // ล้างข้อมูลเพื่อนและแชทเพื่อนทั้งหมด
     await FriendDB.clearAllData();
     
+    debugPrint('[Logout] ✅ Logout เสร็จสิ้น');
     notifyListeners();
+  }
+
+  /// 🔄 Sync ข้อความแชททั้งหมดขึ้น Firebase
+  Future<void> _syncChatsToFirebase() async {
+    if (friendService.currentUser == null) return;
+    
+    try {
+      final userId = friendService.currentUser!.id;
+      final messages = await ChatDB.getMessages(userId);
+      
+      if (messages.isEmpty) {
+        debugPrint('[Sync] ไม่มีข้อความที่ต้อง sync');
+        return;
+      }
+      
+      // แปลง ChatMessage เป็น Map
+      final messageMaps = messages.map((msg) => {
+        'id': msg.id,
+        'from': msg.from,
+        'type': msg.type.toString().split('.').last,
+        'text': msg.text,
+        'filePath': msg.filePath,
+        'time': msg.time.millisecondsSinceEpoch,
+        'isEmergency': msg.isEmergency,
+        'status': msg.status.toString().split('.').last,
+      }).toList();
+      
+      final syncedCount = await firebaseService.syncPendingMessages(messageMaps);
+      debugPrint('[Sync] ✅ Synced $syncedCount/${messages.length} messages to Firebase');
+    } catch (e) {
+      debugPrint('[Sync] ❌ Error syncing to Firebase: $e');
+    }
+  }
+
+  /// � Sync ข้อความที่ยังไม่ได้ sync (สถานะ sent) ขึ้น Firebase หลัง login
+  Future<void> _syncNearbyMessagesToFirebase() async {
+    if (friendService.currentUser == null) return;
+    
+    try {
+      final userId = friendService.currentUser!.id;
+      
+      // ดึงข้อความที่ยังไม่ได้ sync (สถานะ sent หรือ pending)
+      final unsyncedMessages = await ChatDB.getUnsyncedMessages(userId);
+      final pendingMessages = await ChatDB.getPendingMessages(userId);
+      final allUnsynced = [...unsyncedMessages, ...pendingMessages];
+      
+      if (allUnsynced.isEmpty) {
+        debugPrint('[Sync] ✅ ไม่มีข้อความที่รอ sync');
+        return;
+      }
+      
+      debugPrint('[Sync] 🔄 พบ ${allUnsynced.length} ข้อความที่ต้อง sync');
+      
+      int syncedCount = 0;
+      for (final msg in allUnsynced) {
+        try {
+          // ดึงข้อมูล sender และ receiver จากฐานข้อมูล
+          final database = await ChatDB.db;
+          final msgData = await database.query(
+            'chat_messages',
+            where: 'id = ?',
+            whereArgs: [msg.id],
+            limit: 1,
+          );
+          
+          String? sender;
+          String? receiver;
+          String? receiverName;
+          
+          if (msgData.isNotEmpty) {
+            sender = msgData.first['sender'] as String?;
+            receiver = msgData.first['receiver'] as String?;
+            
+            // หาชื่อของ receiver จาก device ID
+            if (receiver != null) {
+              final peer = _peers.firstWhere(
+                (p) => p.id == receiver,
+                orElse: () => Peer(id: receiver!, name: receiver),
+              );
+              receiverName = peer.name;
+            }
+          }
+          
+          final messageMap = {
+            'id': msg.id,
+            'from': sender ?? msg.from,
+            'to': receiver,
+            'toName': receiverName ?? receiver, // เก็บชื่ออุปกรณ์ที่คุยด้วย
+            'type': msg.type.toString().split('.').last,
+            'text': msg.text,
+            'filePath': msg.filePath,
+            'time': msg.time.millisecondsSinceEpoch,
+            'isEmergency': msg.isEmergency,
+            'status': msg.status.toString().split('.').last,
+            'isNearbyChat': true, // ระบุว่าเป็นข้อความ nearby
+          };
+          
+          final success = await firebaseService.syncChatMessageToCloud(messageMap);
+          if (success) {
+            // อัพเดทสถานะเป็น synced
+            await ChatDB.updateMessageStatus(msg.id, MessageStatus.synced);
+            syncedCount++;
+          }
+        } catch (e) {
+          debugPrint('[Sync] ❌ Error syncing message ${msg.id}: $e');
+        }
+      }
+      
+      debugPrint('[Sync] ✅ Synced $syncedCount/${allUnsynced.length} messages to Firebase');
+      
+      // โหลดข้อความใหม่เพื่ออัปเดตสถานะ
+      if (syncedCount > 0) {
+        await _loadLocalMessages();
+      }
+    } catch (e) {
+      debugPrint('[Sync] ❌ Error in _syncNearbyMessagesToFirebase: $e');
+    }
+  }
+
+  /// �📥 โหลดข้อความแชทจาก Firebase หลัง login
+  Future<void> _loadChatsFromFirebase() async {
+    if (friendService.currentUser == null) return;
+    
+    try {
+      final cloudMessages = await firebaseService.getUserChatMessages();
+      
+      if (cloudMessages.isEmpty) {
+        debugPrint('[Sync] ไม่มีข้อความใน Firebase');
+        return;
+      }
+      
+      final userId = friendService.currentUser!.id;
+      
+      // แปลง Map เป็น ChatMessage และบันทึกลง local
+      for (final msgMap in cloudMessages) {
+        try {
+          final msg = ChatMessage(
+            id: msgMap['id'] ?? '',
+            from: msgMap['from'] ?? 'unknown',
+            type: ChatType.values.firstWhere(
+              (e) => e.toString().split('.').last == msgMap['type'],
+              orElse: () => ChatType.text,
+            ),
+            text: msgMap['text'],
+            filePath: msgMap['filePath'],
+            time: DateTime.fromMillisecondsSinceEpoch(msgMap['time'] ?? 0),
+            isEmergency: msgMap['isEmergency'] ?? false,
+            status: MessageStatus.values.firstWhere(
+              (e) => e.toString().split('.').last == msgMap['status'],
+              orElse: () => MessageStatus.synced,
+            ),
+          );
+          
+          // บันทึกพร้อม receiver (ถ้ามี)
+          final receiver = msgMap['to'] as String?;
+          await ChatDB.insertMessage(msg, userId, receiver: receiver);
+        } catch (e) {
+          debugPrint('[Sync] ❌ Error parsing message: $e');
+        }
+      }
+      
+      debugPrint('[Sync] 📥 Loaded ${cloudMessages.length} messages from Firebase');
+      await _loadLocalMessages();
+    } catch (e) {
+      debugPrint('[Sync] ❌ Error loading from Firebase: $e');
+    }
+  }
+
+  /// 🔄 Force Sync - บังคับซิงก์ข้อความกับ Firebase ทันที
+  Future<void> forceSyncWithFirebase() async {
+    if (friendService.currentUser == null) {
+      debugPrint('[ForceSync] ❌ ต้อง login ก่อน');
+      return;
+    }
+    
+    if (!firebaseService.isOnline) {
+      debugPrint('[ForceSync] ❌ ไม่มีอินเทอร์เน็ต');
+      return;
+    }
+    
+    debugPrint('[ForceSync] 🔄 เริ่ม Force Sync...');
+    
+    try {
+      // 1. Sync ข้อความ local ขึ้น Firebase
+      await _syncNearbyMessagesToFirebase();
+      
+      // 2. ดึงข้อความจาก Firebase ลงมา
+      await _loadChatsFromFirebase();
+      
+      debugPrint('[ForceSync] ✅ Force Sync เสร็จสิ้น');
+      notifyListeners();
+    } catch (e) {
+      debugPrint('[ForceSync] ❌ Error: $e');
+    }
+  }
+
+  /// 🗑️ ลบข้อความ (ทั้ง local และ Firebase)
+  Future<void> deleteMessage(String messageId) async {
+    try {
+      // 1. ลบจาก local database
+      await ChatDB.deleteMessage(messageId);
+      
+      // 2. ลบจาก Firebase (ถ้า login และ online)
+      if (friendService.currentUser != null && firebaseService.isOnline) {
+        await firebaseService.deleteChatMessage(friendService.currentUser!.id, messageId);
+        debugPrint('[DeleteMsg] 🗑️ Deleted from Firebase: $messageId');
+      }
+      
+      // 3. โหลดข้อความใหม่
+      await _loadLocalMessages();
+      
+      debugPrint('[DeleteMsg] ✅ Message deleted: $messageId');
+      notifyListeners();
+    } catch (e) {
+      debugPrint('[DeleteMsg] ❌ Error: $e');
+    }
   }
 
   // 🌐 Mesh Network: จัดการข้อความที่ต้อง Relay ต่อ
@@ -1202,7 +1622,139 @@ void addChatVideo(String path) {
     }
   }
   
-  // 📊 ดึงข้อมูล Network Topology
+  // � จัดการข้อความ GPS Location (ไม่บันทึกลง chat)
+  void _handleGPSLocation(String message, String fromPeerId) {
+    // Format: "GPS_LOC:lat,lng,timestamp"
+    final parts = message.split(':');
+    if (parts.length >= 2 && parts[0] == 'GPS_LOC') {
+      try {
+        final location = PeerLocation.fromString(parts[1]);
+        _peerLocations[fromPeerId] = location;
+        debugPrint('📍 อัพเดทตำแหน่ง peer $fromPeerId: ${location.latitude}, ${location.longitude}');
+        notifyListeners();
+      } catch (e) {
+        debugPrint('❌ ไม่สามารถแปลงข้อมูล GPS: $e');
+      }
+    }
+  }
+  
+  // 📍 คำนวณระยะห่างจาก peer (synchronous version สำหรับ StreamBuilder)
+  double? getDistanceToPeerSync(String peerId, Position? myPosition) {
+    if (myPosition == null) return null;
+    final peerLoc = _peerLocations[peerId];
+    if (peerLoc == null) return null;
+    
+    // ใช้ Haversine formula คำนวณระยะทาง
+    return Geolocator.distanceBetween(
+      myPosition.latitude,
+      myPosition.longitude,
+      peerLoc.latitude,
+      peerLoc.longitude,
+    );
+  }
+  
+  // � เริ่ม broadcast GPS location ทุก 8 วินาที
+  void _startLocationBroadcast() {
+    _locationBroadcastTimer?.cancel();
+    _locationBroadcastTimer = Timer.periodic(const Duration(seconds: 8), (timer) async {
+      if (_peers.isNotEmpty) {
+        await broadcastMyLocation();
+      }
+    });
+    debugPrint('📍 เริ่ม GPS location broadcast ทุก 8 วินาที');
+  }
+  
+  // 📍 หยุด broadcast GPS location
+  void _stopLocationBroadcast() {
+    _locationBroadcastTimer?.cancel();
+    _locationBroadcastTimer = null;
+    debugPrint('📍 หยุด GPS location broadcast');
+  }
+  
+  // � Keep Alive - ส่ง heartbeat ทุก 30 วินาที
+  void _startKeepAlive() {
+    _keepAliveTimer?.cancel();
+    _keepAliveTimer = Timer.periodic(const Duration(seconds: 30), (timer) async {
+      if (_peers.isNotEmpty) {
+        // ส่ง keep alive message เพื่อรักษาการเชื่อมต่อ
+        try {
+          await transport.sendMessage('KEEP_ALIVE:${DateTime.now().millisecondsSinceEpoch}');
+          debugPrint('💓 Keep Alive sent to ${_peers.length} peers');
+        } catch (e) {
+          debugPrint('❌ Keep Alive failed: $e');
+        }
+      }
+    });
+    debugPrint('💓 เริ่ม Keep Alive ทุก 30 วินาที');
+  }
+  
+  // 🔁 Connection Monitor - ตรวจสอบและ reconnect ทุก 10 วินาที
+  void _startConnectionMonitor() {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer.periodic(const Duration(seconds: 10), (timer) async {
+      // ถ้าเปิดโหมด SOS หรือ Rescue แต่ไม่มี peer → พยายาม reconnect
+      if ((_isSOSActive || _isRescueMode) && _peers.isEmpty) {
+        if (_reconnectAttempts < _maxReconnectAttempts) {
+          _reconnectAttempts++;
+          debugPrint('🔁 Reconnect attempt $_reconnectAttempts/$_maxReconnectAttempts');
+          
+          // พยายาม scan ใหม่
+          await stopScan();
+          await Future.delayed(const Duration(seconds: 1));
+          await startScan();
+          
+        } else if (_reconnectAttempts == _maxReconnectAttempts) {
+          debugPrint('⚠️ Reconnect failed after $_maxReconnectAttempts attempts');
+          _reconnectAttempts++; // เพิ่มอีก 1 เพื่อไม่ให้ log ซ้ำ
+        }
+      }
+      
+      // ถ้ามี peer แล้ว reset counter
+      if (_peers.isNotEmpty && _reconnectAttempts > 0) {
+        _reconnectAttempts = 0;
+      }
+    });
+    debugPrint('🔁 เริ่ม Connection Monitor ทุก 10 วินาที');
+  }
+  
+  // �📍 ส่ง GPS Location ของตัวเองไปให้ peers
+  Future<void> broadcastMyLocation() async {
+    try {
+      Position? position;
+      
+      // พยายามดึง GPS ปัจจุบัน (timeout 15 วินาที)
+      try {
+        position = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.medium, // ลดความแม่นยำเพื่อความเร็ว
+          timeLimit: const Duration(seconds: 15),
+        );
+      } catch (e) {
+        // ถ้าไม่ได้ ให้ใช้ตำแหน่งล่าสุดแทน
+        debugPrint('⚠️ ไม่สามารถดึง GPS ปัจจุบัน: $e');
+        debugPrint('📍 กำลังใช้ตำแหน่งล่าสุดแทน...');
+        position = await Geolocator.getLastKnownPosition();
+      }
+      
+      if (position == null) {
+        debugPrint('❌ ไม่มีข้อมูล GPS (ทั้งปัจจุบันและล่าสุด)');
+        return;
+      }
+      
+      final location = PeerLocation(
+        latitude: position.latitude,
+        longitude: position.longitude,
+        timestamp: DateTime.now(),
+      );
+      
+      final message = 'GPS_LOC:${location.toString()}';
+      await transport.sendMessage(message);
+      debugPrint('📍 ส่งตำแหน่ง: ${location.latitude}, ${location.longitude} (±${position.accuracy.toStringAsFixed(1)}m)');
+    } catch (e) {
+      debugPrint('❌ ไม่สามารถดึง GPS ได้: $e');
+    }
+  }
+  
+  // �📊 ดึงข้อมูล Network Topology
   Map<String, Set<String>> get networkTopology => Map.unmodifiable(_networkTopology);
   
   // 📊 สถิติ Mesh Network
@@ -1265,13 +1817,31 @@ void addChatVideo(String path) {
   Future<void> onUserLogin() async {
     debugPrint('[AppState] 🔑 เริ่มต้น onUserLogin...');
     
-    // โหลดข้อความทั่วไป
-    await _loadLocalMessages();
-    
     // ดึงโปรไฟล์จาก Firebase และ sync ข้อมูล (จะตั้งสถานะออนไลน์ภายในแล้ว)
     debugPrint('[AppState] 🔄 กำลัง init friendService...');
     await friendService.init();
     debugPrint('[AppState] ✅ init friendService เสร็จสิ้น');
+    
+    // 🆔 ตั้งค่า User ID ให้ DeviceIdManager
+    if (friendService.currentUser != null) {
+      DeviceIdManager.setUserId(friendService.currentUser!.id);
+    }
+    
+    // ⚠️ สำคัญ: Migrate ข้อความ anonymous เป็น userId ก่อนโหลด
+    if (friendService.currentUser != null) {
+      debugPrint('[AppState] 🔄 Starting migration for user: ${friendService.currentUser!.id}');
+      await ChatDB.migrateAnonymousMessages(friendService.currentUser!.id);
+    }
+    
+    // โหลดข้อความทั่วไป (หลังจาก init และ migrate แล้ว)
+    debugPrint('[AppState] 📥 Loading local messages after migration...');
+    await _loadLocalMessages();
+    
+    // 🔄 Sync ข้อความที่ยังไม่ได้ sync ขึ้น Firebase
+    if (friendService.currentUser != null && firebaseService.isOnline) {
+      debugPrint('[AppState] 🔄 Syncing nearby messages to Firebase...');
+      await _syncNearbyMessagesToFirebase();
+    }
     
     // อัปเดตชื่อเครื่องให้เป็นชื่อ User
     if (friendService.currentUser != null) {
@@ -1373,6 +1943,9 @@ void addChatVideo(String path) {
   @override
   void dispose() {
     _stopOnlineStatusUpdates();
+    _locationBroadcastTimer?.cancel();
+    _keepAliveTimer?.cancel();
+    _reconnectTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     transport.dispose();
     super.dispose();
