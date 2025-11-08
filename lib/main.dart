@@ -555,7 +555,249 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
+  late AnimationController _blinkController;
+
+  @override
+  void initState() {
+    super.initState();
+    _blinkController = AnimationController(
+      duration: const Duration(milliseconds: 800),
+      vsync: this,
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _blinkController.dispose();
+    super.dispose();
+  }
+
+  // Helper method สำหรับสร้าง content ของ peer card
+  Widget _buildPeerCardContent(
+    Peer p,
+    bool isSOS,
+    bool isSOSActive,
+    bool isRescue,
+    AppState appState,
+  ) {
+    return Row(
+      children: [
+        // 🚨 Icon SOS / 🚑 Icon หน่วยกู้ภัย / icon ปกติ
+        Icon(
+          isSOS
+              ? Icons.warning_amber_rounded
+              : isRescue
+                  ? Icons.local_hospital
+                  : Icons.device_hub,
+          color: isSOS
+              ? Colors.red
+              : isRescue
+                  ? Colors.blue
+                  : Colors.blue,
+          size: 18,
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Flexible(
+                    child: Text(
+                      p.name.isNotEmpty ? p.name : 'อุปกรณ์ไม่ระบุชื่อ',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: isSOS
+                            ? Colors.red
+                            : isRescue
+                                ? Colors.blue
+                                : Colors.black,
+                      ),
+                    ),
+                  ),
+                  // 🚨 Badge SOS สีแดง
+                  if (isSOS) ...[
+                    const SizedBox(width: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.red,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Text(
+                        '🚨 SOS',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                  // 🚑 Badge หน่วยกู้ภัย
+                  if (isRescue && !isSOS) ...[
+                    const SizedBox(width: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.blue,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Text(
+                        '🚑 กู้ภัย',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              Text(
+                'ID: ${p.id}',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey[600],
+                ),
+              ),
+              // 📍 แสดงระยะห่าง (อัพเดททุก 5 วินาที)
+              StreamBuilder<Position>(
+                stream: Geolocator.getPositionStream(
+                  locationSettings: const LocationSettings(
+                    accuracy: LocationAccuracy.best,
+                    distanceFilter: 1, // อัพเดทเมื่อเคลื่อนที่ 1 เมตร
+                  ),
+                ),
+                builder: (context, snapshot) {
+                  Position? myPosition;
+
+                  if (snapshot.hasData) {
+                    myPosition = snapshot.data;
+                  } else {
+                    // Fallback: ถ้าไม่มี stream ให้แสดงข้อความรอ
+                    return Row(
+                      children: [
+                        const SizedBox(
+                          width: 10,
+                          height: 10,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          'กำลังหา GPS...',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.grey.shade600,
+                          ),
+                        ),
+                      ],
+                    );
+                  }
+
+                  final distance = appState.getDistanceToPeerSync(p.id, myPosition);
+
+                  if (distance == null) {
+                    // แสดงว่ายังไม่ได้รับตำแหน่ง GPS ของ peer
+                    return Row(
+                      children: [
+                        Icon(
+                          Icons.location_off,
+                          size: 12,
+                          color: Colors.grey.shade400,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          'ไม่มีตำแหน่ง',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.grey.shade400,
+                          ),
+                        ),
+                      ],
+                    );
+                  }
+
+                  // แปลงหน่วย: < 1 km แสดงเป็นเมตร, >= 1 km แสดงเป็น km
+                  String distanceText;
+                  Color distanceColor;
+
+                  if (distance < 1000) {
+                    distanceText = '${distance.toStringAsFixed(0)} m';
+                    // สีเขียวถ้าใกล้มาก (< 10m), เหลืองถ้าปานกลาง, ส้มถ้าไกล
+                    if (distance < 10) {
+                      distanceColor = Colors.green.shade700;
+                    } else if (distance < 50) {
+                      distanceColor = Colors.orange.shade700;
+                    } else {
+                      distanceColor = Colors.grey.shade700;
+                    }
+                  } else {
+                    distanceText = '${(distance / 1000).toStringAsFixed(2)} km';
+                    distanceColor = Colors.grey.shade700;
+                  }
+
+                  return Row(
+                    children: [
+                      Icon(
+                        Icons.my_location,
+                        size: 12,
+                        color: distanceColor,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        distanceText,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: distanceColor,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 8),
+        ElevatedButton.icon(
+          onPressed: () {
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => EmergencyChatScreen(peer: p),
+              ),
+            );
+          },
+          icon: const Icon(Icons.chat, size: 14),
+          label: const Text(
+            'แชท',
+            style: TextStyle(fontSize: 12),
+          ),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: isRescue ? Colors.blue : Colors.green,
+            foregroundColor: Colors.white,
+            minimumSize: const Size(70, 32),
+            padding: const EdgeInsets.symmetric(
+              horizontal: 8,
+              vertical: 4,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -597,38 +839,226 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: Column(
                     children: [
                       const SizedBox(height: 60),
-                      // Header with greeting
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(20),
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            colors: [cs.primary, cs.secondary],
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
+
+                      // Discovered Devices (แสดงเป็น simple card) - ย้ายขึ้นมาบนสุด
+                      if (peers.isNotEmpty) ...[
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.1),
+                                blurRadius: 8,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
                           ),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'สวัสดี',
-                              style: theme.textTheme.headlineMedium?.copyWith(
-                                color: cs.onPrimary,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Icon(
+                                    Icons.devices,
+                                    color: Colors.blue,
+                                    size: 24,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  const Text(
+                                    'อุปกรณ์ที่พบ',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  const Spacer(),
+                                  // 🚑 จำนวนหน่วยกู้ภัย
+                                  if (peers.where((p) => appState.isPeerRescue(p.id)).isNotEmpty) ...[
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 6,
+                                        vertical: 2,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.blue.withOpacity(0.15),
+                                        borderRadius: BorderRadius.circular(12),
+                                        border: Border.all(
+                                          color: Colors.blue,
+                                          width: 1,
+                                        ),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(
+                                            Icons.local_hospital,
+                                            color: Colors.blue,
+                                            size: 12,
+                                          ),
+                                          const SizedBox(width: 3),
+                                          Text(
+                                            '${peers.where((p) => appState.isPeerRescue(p.id)).length}',
+                                            style: const TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.blue,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                  ],
+                                  // ⚠️ จำนวนโหมด SOS (ยังไม่กดปุ่ม)
+                                  if (peers.where((p) => appState.isSOSModePeer(p.id) && !appState.isSOSPeer(p.id)).isNotEmpty) ...[
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 6,
+                                        vertical: 2,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.orange.withOpacity(0.15),
+                                        borderRadius: BorderRadius.circular(12),
+                                        border: Border.all(
+                                          color: Colors.orange,
+                                          width: 1,
+                                        ),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(
+                                            Icons.emergency,
+                                            color: Colors.orange,
+                                            size: 12,
+                                          ),
+                                          const SizedBox(width: 3),
+                                          Text(
+                                            '${peers.where((p) => appState.isSOSModePeer(p.id) && !appState.isSOSPeer(p.id)).length}',
+                                            style: const TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.orange,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                  ],
+                                  // 🚨 จำนวนผู้ขอความช่วยเหลือด่วน (กดปุ่ม SOS)
+                                  if (peers.where((p) => appState.isSOSPeer(p.id)).isNotEmpty) ...[
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 6,
+                                        vertical: 2,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.red.withOpacity(0.15),
+                                        borderRadius: BorderRadius.circular(12),
+                                        border: Border.all(
+                                          color: Colors.red,
+                                          width: 1,
+                                        ),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(
+                                            Icons.warning_amber_rounded,
+                                            color: Colors.red,
+                                            size: 12,
+                                          ),
+                                          const SizedBox(width: 3),
+                                          Text(
+                                            '${peers.where((p) => appState.isSOSPeer(p.id)).length}',
+                                            style: const TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.red,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ],
                               ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              'ยินดีต้อนรับสู่ระบบสื่อสารฉุกเฉิน',
-                              style: theme.textTheme.bodyMedium?.copyWith(
-                                color: cs.onPrimary.withOpacity(0.9),
-                              ),
-                            ),
-                          ],
+                              const SizedBox(height: 12),
+                              ...peers.take(3).map((p) {
+                                // 🚑 เช็คว่าเป็นหน่วยกู้ภัยหรือไม่
+                                final isRescue = appState.isPeerRescue(p.id);
+                                // 🚨 เช็คว่าอยู่ในโหมด SOS หรือไม่
+                                final isSOSMode = appState.isSOSModePeer(p.id);
+                                // 🚨 เช็คว่ากดปุ่ม SOS (ขอความช่วยเหลือด่วน) หรือไม่
+                                final isSOSActive = appState.isSOSPeer(p.id);
+                                // รวม: แสดงสีแดงถ้าอยู่ในโหมด SOS หรือกดปุ่ม SOS
+                                final isSOS = isSOSMode || isSOSActive;
+
+                                // 🚨 ถ้ากด SOS ฉุกเฉินด่วน ให้กระพริบ
+                                if (isSOSActive) {
+                                  return AnimatedBuilder(
+                                    animation: _blinkController,
+                                    builder: (context, child) {
+                                      final opacity = _blinkController.value;
+                                      return Container(
+                                        margin: const EdgeInsets.only(bottom: 6),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 6,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: Colors.red.withOpacity(0.15 + (opacity * 0.2)),
+                                          borderRadius: BorderRadius.circular(8),
+                                          border: Border.all(
+                                            color: Colors.red.withOpacity(0.5 + (opacity * 0.5)),
+                                            width: 2,
+                                          ),
+                                        ),
+                                        child: child,
+                                      );
+                                    },
+                                    child: _buildPeerCardContent(p, isSOS, isSOSActive, isRescue, appState),
+                                  );
+                                }
+
+                                // ไม่กระพริบสำหรับโหมด SOS หรือหน่วยกู้ภัย
+                                return Container(
+                                  margin: const EdgeInsets.only(bottom: 6),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 6,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: isSOS
+                                        ? Colors.red.withOpacity(0.15)
+                                        : isRescue
+                                            ? Colors.blue.withOpacity(0.15)
+                                            : Colors.blue.withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: isSOS
+                                        ? Border.all(
+                                            color: Colors.red,
+                                            width: 2,
+                                          )
+                                        : isRescue
+                                            ? Border.all(
+                                                color: Colors.blue,
+                                                width: 2,
+                                              )
+                                            : null,
+                                  ),
+                                  child: _buildPeerCardContent(p, isSOS, isSOSActive, isRescue, appState),
+                                );
+                              }),
+                            ],
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 24),
+                        const SizedBox(height: 24),
+                      ],
 
                       // 🚨 โหมดฉุกเฉิน SOS Card
                       AnimatedBuilder(
@@ -973,392 +1403,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         ],
                       ),
 
-                      const SizedBox(height: 24),
-
-                      // Discovered Devices (แสดงเป็น simple card)
-                      if (peers.isNotEmpty) ...[
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(16),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.1),
-                                blurRadius: 8,
-                                offset: const Offset(0, 4),
-                              ),
-                            ],
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Icon(
-                                    Icons.devices,
-                                    color: Colors.blue,
-                                    size: 24,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  const Text(
-                                    'อุปกรณ์ที่พบ',
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                  const Spacer(),
-                                  // 🚑 จำนวนหน่วยกู้ภัย
-                                  if (peers.where((p) => appState.isPeerRescue(p.id)).isNotEmpty) ...[
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 6,
-                                        vertical: 2,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: Colors.blue.withOpacity(0.15),
-                                        borderRadius: BorderRadius.circular(12),
-                                        border: Border.all(
-                                          color: Colors.blue,
-                                          width: 1,
-                                        ),
-                                      ),
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Icon(
-                                            Icons.local_hospital,
-                                            color: Colors.blue,
-                                            size: 12,
-                                          ),
-                                          const SizedBox(width: 3),
-                                          Text(
-                                            '${peers.where((p) => appState.isPeerRescue(p.id)).length}',
-                                            style: const TextStyle(
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.bold,
-                                              color: Colors.blue,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    const SizedBox(width: 4),
-                                  ],
-                                  // 🚨 จำนวนผู้ขอความช่วยเหลือ
-                                  if (peers.where((p) => appState.isSOSPeer(p.id)).isNotEmpty) ...[
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 6,
-                                        vertical: 2,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: Colors.red.withOpacity(0.15),
-                                        borderRadius: BorderRadius.circular(12),
-                                        border: Border.all(
-                                          color: Colors.red,
-                                          width: 1,
-                                        ),
-                                      ),
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Icon(
-                                            Icons.warning_amber_rounded,
-                                            color: Colors.red,
-                                            size: 12,
-                                          ),
-                                          const SizedBox(width: 3),
-                                          Text(
-                                            '${peers.where((p) => appState.isSOSPeer(p.id)).length}',
-                                            style: const TextStyle(
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.bold,
-                                              color: Colors.red,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ],
-                              ),
-                              const SizedBox(height: 12),
-                              ...peers.take(3).map((p) {
-                                // 🚑 เช็คว่าเป็นหน่วยกู้ภัยหรือไม่
-                                final isRescue = appState.isPeerRescue(p.id);
-                                // 🚨 เช็คว่าเปิด SOS หรือไม่
-                                final isSOS = appState.isSOSPeer(p.id);
-
-                                return Container(
-                                  margin: const EdgeInsets.only(bottom: 6),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                    vertical: 6,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: isSOS
-                                        ? Colors.red.withOpacity(0.15)
-                                        : isRescue
-                                            ? Colors.blue.withOpacity(0.15)
-                                            : Colors.blue.withOpacity(0.1),
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: isSOS
-                                        ? Border.all(
-                                            color: Colors.red,
-                                            width: 2,
-                                          )
-                                        : isRescue
-                                            ? Border.all(
-                                                color: Colors.blue,
-                                                width: 2,
-                                              )
-                                            : null,
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      // 🚨 Icon SOS / 🚑 Icon หน่วยกู้ภัย / icon ปกติ
-                                      Icon(
-                                        isSOS
-                                            ? Icons.warning_amber_rounded
-                                            : isRescue
-                                                ? Icons.local_hospital
-                                                : Icons.device_hub,
-                                        color: isSOS
-                                            ? Colors.red
-                                            : isRescue
-                                                ? Colors.blue
-                                                : Colors.blue,
-                                        size: 18,
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Row(
-                                              children: [
-                                                Flexible(
-                                                  child: Text(
-                                                    p.name.isNotEmpty
-                                                        ? p.name
-                                                        : 'อุปกรณ์ไม่ระบุชื่อ',
-                                                    style: TextStyle(
-                                                      fontSize: 14,
-                                                      fontWeight:
-                                                          FontWeight.bold,
-                                                      color: isSOS
-                                                          ? Colors.red
-                                                          : isRescue
-                                                              ? Colors.blue
-                                                              : Colors.black,
-                                                    ),
-                                                  ),
-                                                ),
-                                                // 🚨 Badge SOS สีแดง
-                                                if (isSOS) ...[
-                                                  const SizedBox(width: 4),
-                                                  Container(
-                                                    padding:
-                                                        const EdgeInsets.symmetric(
-                                                          horizontal: 6,
-                                                          vertical: 2,
-                                                        ),
-                                                    decoration: BoxDecoration(
-                                                      color: Colors.red,
-                                                      borderRadius:
-                                                          BorderRadius.circular(
-                                                            12,
-                                                          ),
-                                                    ),
-                                                    child: const Text(
-                                                      '🚨 SOS',
-                                                      style: TextStyle(
-                                                        fontSize: 10,
-                                                        color: Colors.white,
-                                                        fontWeight:
-                                                            FontWeight.bold,
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ],
-                                                // 🚑 Badge หน่วยกู้ภัย
-                                                if (isRescue && !isSOS) ...[
-                                                  const SizedBox(width: 4),
-                                                  Container(
-                                                    padding:
-                                                        const EdgeInsets.symmetric(
-                                                          horizontal: 6,
-                                                          vertical: 2,
-                                                        ),
-                                                    decoration: BoxDecoration(
-                                                      color: Colors.blue,
-                                                      borderRadius:
-                                                          BorderRadius.circular(
-                                                            12,
-                                                          ),
-                                                    ),
-                                                    child: const Text(
-                                                      '🚑 กู้ภัย',
-                                                      style: TextStyle(
-                                                        fontSize: 10,
-                                                        color: Colors.white,
-                                                        fontWeight:
-                                                            FontWeight.bold,
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ],
-                                              ],
-                                            ),
-                                            Text(
-                                              'ID: ${p.id}',
-                                              style: TextStyle(
-                                                fontSize: 12,
-                                                color: Colors.grey[600],
-                                              ),
-                                            ),
-                                            // 📍 แสดงระยะห่าง (อัพเดททุก 5 วินาที)
-                                            StreamBuilder<Position>(
-                                              stream: Geolocator.getPositionStream(
-                                                locationSettings: const LocationSettings(
-                                                  accuracy: LocationAccuracy.best,
-                                                  distanceFilter: 1, // อัพเดทเมื่อเคลื่อนที่ 1 เมตร
-                                                ),
-                                              ),
-                                              builder: (context, snapshot) {
-                                                Position? myPosition;
-                                                
-                                                if (snapshot.hasData) {
-                                                  myPosition = snapshot.data;
-                                                } else {
-                                                  // Fallback: ถ้าไม่มี stream ให้แสดงข้อความรอ
-                                                  return Row(
-                                                    children: [
-                                                      const SizedBox(
-                                                        width: 10,
-                                                        height: 10,
-                                                        child: CircularProgressIndicator(strokeWidth: 2),
-                                                      ),
-                                                      const SizedBox(width: 4),
-                                                      Text(
-                                                        'กำลังหา GPS...',
-                                                        style: TextStyle(
-                                                          fontSize: 11,
-                                                          color: Colors.grey.shade600,
-                                                        ),
-                                                      ),
-                                                    ],
-                                                  );
-                                                }
-                                                
-                                                final distance = appState.getDistanceToPeerSync(p.id, myPosition);
-                                                
-                                                if (distance == null) {
-                                                  // แสดงว่ายังไม่ได้รับตำแหน่ง GPS ของ peer
-                                                  return Row(
-                                                    children: [
-                                                      Icon(
-                                                        Icons.location_off,
-                                                        size: 12,
-                                                        color: Colors.grey.shade400,
-                                                      ),
-                                                      const SizedBox(width: 4),
-                                                      Text(
-                                                        'ไม่มีตำแหน่ง',
-                                                        style: TextStyle(
-                                                          fontSize: 11,
-                                                          color: Colors.grey.shade400,
-                                                        ),
-                                                      ),
-                                                    ],
-                                                  );
-                                                }
-                                                
-                                                // แปลงหน่วย: < 1 km แสดงเป็นเมตร, >= 1 km แสดงเป็น km
-                                                String distanceText;
-                                                Color distanceColor;
-                                                
-                                                if (distance < 1000) {
-                                                  distanceText = '${distance.toStringAsFixed(0)} m';
-                                                  // สีเขียวถ้าใกล้มาก (< 10m), เหลืองถ้าปานกลาง, ส้มถ้าไกล
-                                                  if (distance < 10) {
-                                                    distanceColor = Colors.green.shade700;
-                                                  } else if (distance < 50) {
-                                                    distanceColor = Colors.orange.shade700;
-                                                  } else {
-                                                    distanceColor = Colors.grey.shade700;
-                                                  }
-                                                } else {
-                                                  distanceText = '${(distance / 1000).toStringAsFixed(2)} km';
-                                                  distanceColor = Colors.grey.shade700;
-                                                }
-                                                
-                                                return Row(
-                                                  children: [
-                                                    Icon(
-                                                      Icons.my_location,
-                                                      size: 12,
-                                                      color: distanceColor,
-                                                    ),
-                                                    const SizedBox(width: 4),
-                                                    Text(
-                                                      distanceText,
-                                                      style: TextStyle(
-                                                        fontSize: 11,
-                                                        color: distanceColor,
-                                                        fontWeight: FontWeight.w500,
-                                                      ),
-                                                    ),
-                                                  ],
-                                                );
-                                              },
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      ElevatedButton.icon(
-                                        onPressed: () {
-                                          Navigator.of(context).push(
-                                            MaterialPageRoute(
-                                              builder: (_) =>
-                                                  EmergencyChatScreen(peer: p),
-                                            ),
-                                          );
-                                        },
-                                        icon: const Icon(
-                                          Icons.message,
-                                          size: 16,
-                                        ),
-                                        label: const Text(
-                                          'แชท',
-                                          style: TextStyle(fontSize: 12),
-                                        ),
-                                        style: ElevatedButton.styleFrom(
-                                          backgroundColor: isRescue
-                                              ? Colors.blue
-                                              : Colors.green,
-                                          foregroundColor: Colors.white,
-                                          minimumSize: const Size(70, 32),
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 8,
-                                            vertical: 4,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              }),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 24),
-                      ],
+                      const SizedBox(height: 100),
                     ],
                   ),
                 ),

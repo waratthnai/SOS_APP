@@ -34,12 +34,46 @@ class NearbyTransport implements Transport {
   final Map<int, _PendingFile> _pendingFiles = {}; // payloadId -> file info
   final Set<String> _pendingConnections = {}; // ป้องกันการ request ซ้ำ
   final Map<String, String> _fileMetadata = {}; // peerId -> fileType (VIDEO/IMAGE)
+  final Set<String> _cleanupDisconnects = {}; // endpoint IDs ที่กำลัง disconnect เพื่อ cleanup (ไม่ลบจาก _found)
+  
+  // 🆕 เก็บ persistent peers - peers ที่เคยเชื่อมต่อและต้องการรักษาการเชื่อมต่อ
+  final Map<String, ConnectionInfo> _persistentPeers = {}; // endpointId -> ConnectionInfo
+  final Map<String, DateTime> _lostPeers = {}; // endpointId -> เวลาที่หาย (สำหรับ grace period)
 
   DiscoveryState _state = DiscoveryState.idle;
   bool _isAdvertising = false;
   bool _isDiscovering = false;
 
-  NearbyTransport({required this.deviceName});
+  NearbyTransport({required this.deviceName}) {
+    // ⚡ เริ่ม periodic cleanup สำหรับ lost peers ที่เก่ามาก
+    _startPeriodicCleanup();
+  }
+
+  // ทำความสะอาด lost peers ที่หายไปนาน > 1 ชั่วโมง
+  void _startPeriodicCleanup() {
+    Timer.periodic(const Duration(minutes: 10), (_) {
+      final now = DateTime.now();
+      final toRemove = <String>[];
+      
+      for (final entry in _lostPeers.entries) {
+        final downDuration = now.difference(entry.value);
+        if (downDuration.inHours >= 1) {
+          print('🧹 Removing lost peer ${entry.key} - down for ${downDuration.inHours} hours');
+          toRemove.add(entry.key);
+        }
+      }
+      
+      for (final id in toRemove) {
+        _lostPeers.remove(id);
+        _persistentPeers.remove(id);
+        _found.remove(id);
+      }
+      
+      if (toRemove.isNotEmpty) {
+        _emitPeers();
+      }
+    });
+  }
 
   // Stream สำหรับไฟล์ที่ได้รับ
   Stream<ReceivedFile> get onFileReceived => _fileCtrl.stream;
@@ -188,9 +222,12 @@ class NearbyTransport implements Transport {
         _connected[rid] = info;
         print('📝 Saved connection info for ${info.endpointName} ($rid)');
         
-        // ✅ ลอง accept connection ทั้งสองฝั่ง
-        // รอให้ฝั่ง advertising accept ก่อน
-        await Future.delayed(const Duration(milliseconds: 200));
+        // ⚡ บันทึกเป็น persistent peer (เพื่อ auto-reconnect ในอนาคต)
+        _persistentPeers[rid] = info;
+        print('💾 Added to persistent peers list');
+        
+        // ⚡ ลด delay จาก 200ms → 100ms เพื่อความเร็ว
+        await Future.delayed(const Duration(milliseconds: 100));
         
         try {
           await Nearby().acceptConnection(
@@ -344,11 +381,73 @@ class NearbyTransport implements Transport {
       onDisconnected: (rid) {
         print('❌ Disconnected (discovery): $rid');
         _pendingConnections.remove(rid);
+        
+        // ⚡ ถ้าเป็น persistent peer → เก็บไว้ (ไม่ลบ) แค่ mark ว่า disconnected
+        final wasPersistent = _persistentPeers.containsKey(rid);
+        if (wasPersistent) {
+          print('💾 Persistent peer disconnected - will keep for auto-reconnect');
+          _lostPeers[rid] = DateTime.now();
+          // ไม่ลบจาก _persistentPeers
+        }
+        
         _connected.remove(rid);
-        _found.remove(rid);
+        
+        // ⚡ ถ้าเป็น cleanup disconnect (เพื่อ retry) → ไม่ลบจาก _found
+        if (_cleanupDisconnects.contains(rid)) {
+          print('   This is a cleanup disconnect - keeping endpoint in _found for retry');
+          _cleanupDisconnects.remove(rid);
+        } else if (!wasPersistent) {
+          // disconnect จริงๆ และไม่ใช่ persistent → ลบออกจาก _found
+          _found.remove(rid);
+        } else {
+          // persistent peer → เก็บไว้ใน _found เพื่อแสดงใน UI (แต่ status = disconnected)
+          print('   Keeping persistent peer in _found for display');
+        }
+        
         _emitPeers();
       },
     ).catchError((error) {
+      // ⚡ ตรวจสอบว่าเชื่อมต่ออยู่แล้วหรือไม่ (8003)
+      if (error.toString().contains('8003') || error.toString().contains('STATUS_ALREADY_CONNECTED')) {
+        print('⚠️ STATUS_ALREADY_CONNECTED detected for $id');
+        print('   This means Nearby API has stale connection - disconnecting first...');
+        _pendingConnections.remove(id);
+        
+        // เพิ่มลง cleanup set ก่อน disconnect (เพื่อไม่ให้ onDisconnected ลบจาก _found)
+        _cleanupDisconnects.add(id);
+        
+        // Disconnect connection เก่าที่ค้างอยู่
+        Nearby().disconnectFromEndpoint(id).then((_) {
+          print('✅ Disconnected stale connection for $id');
+          // รอให้ API cleanup เสร็จ
+          return Future.delayed(const Duration(milliseconds: 500));
+        }).then((_) {
+          // Retry connection ใหม่
+          if (_found.contains(id) && retryCount < 2) {
+            print('🔄 Retrying connection to $id after cleanup...');
+            _pendingConnections.add(id);
+            _doRequestConnection(id, retryCount: retryCount + 1);
+          } else {
+            print('⚠️ Max retries reached or endpoint lost for $id');
+            _cleanupDisconnects.remove(id); // ลบออกจาก cleanup set
+            _emitPeers();
+          }
+        }).catchError((disconnectError) {
+          print('⚠️ Disconnect error for $id: $disconnectError');
+          // ลองใหม่อีกครั้งแม้ disconnect ไม่สำเร็จ
+          Future.delayed(const Duration(milliseconds: 500), () {
+            if (_found.contains(id) && retryCount < 2) {
+              print('🔄 Retrying anyway after disconnect error...');
+              _pendingConnections.add(id);
+              _doRequestConnection(id, retryCount: retryCount + 1);
+            } else {
+              _cleanupDisconnects.remove(id); // ลบออกจาก cleanup set
+            }
+          });
+        });
+        return true;
+      }
+      
       // ตรวจสอบว่าเป็น STATUS_RADIO_ERROR (8007) หรือไม่
       if (error.toString().contains('8007') || error.toString().contains('STATUS_RADIO_ERROR')) {
         print('📡 Radio error detected for $id - waiting before retry (attempt ${retryCount + 1}/3)');
@@ -375,16 +474,24 @@ class NearbyTransport implements Transport {
 
   @override
   Future<void> startDiscovery() async {
-    print('🚀 Starting Nearby Discovery...');
+    print('🚀 [NearbyTransport] startDiscovery() called');
+    print('   Device name: "$deviceName"');
+    print('   Current state: $_state');
+    
+    // ⚡ ถ้ากำลัง scan อยู่แล้ว ไม่ต้องทำอะไร
+    if (_state == DiscoveryState.scanning && _isAdvertising && _isDiscovering) {
+      print('✅ Already scanning and active, skip restart');
+      return;
+    }
     
     // Stop any existing sessions first
-    if (_isAdvertising || _isDiscovering || _state == DiscoveryState.scanning) {
+    if (_isAdvertising || _isDiscovering) {
       print('🔄 Stopping existing sessions...');
       try {
         await stopDiscovery();
-        // 🔧 เพิ่มเวลารอให้ radio พักฟื้น (ป้องกัน STATUS_RADIO_ERROR)
+        // ⚡ ลด delay ลงเหลือ 1 วินาที (จาก 3 วินาที)
         print('⏳ Waiting for radio to stabilize...');
-        await Future.delayed(const Duration(seconds: 3)); // เพิ่มจาก 1.5 เป็น 3 วินาที
+        await Future.delayed(const Duration(milliseconds: 1000));
       } catch (e) {
         print('⚠️ Error stopping previous session: $e');
         // Reset states manually
@@ -392,7 +499,7 @@ class NearbyTransport implements Transport {
         _isDiscovering = false;
         _state = DiscoveryState.idle;
         // รอเพิ่มเติมหลัง error
-        await Future.delayed(const Duration(seconds: 2));
+        await Future.delayed(const Duration(milliseconds: 800));
       }
     }
     
@@ -400,16 +507,6 @@ class NearbyTransport implements Transport {
     if (!ok) {
       print('❌ Permissions not granted for Nearby Connections');
       throw Exception('Permissions not granted for Nearby Connections. Please grant all Bluetooth and Location permissions.');
-    }
-    
-    // 🔧 เพิ่มการตรวจสอบสถานะ Bluetooth ก่อนเริ่ม
-    try {
-      print('📶 Checking Bluetooth status...');
-      // ลองเช็ค Bluetooth โดยใช้ nearby API
-      // ถ้า Bluetooth ปิดอยู่ API จะโยน error
-    } catch (e) {
-      print('⚠️ Bluetooth might be disabled: $e');
-      print('💡 Please ensure Bluetooth and WiFi are enabled');
     }
 
     _state = DiscoveryState.scanning;
@@ -443,6 +540,10 @@ class NearbyTransport implements Transport {
             
             // บันทึก connection info ก่อน (สำคัญ!)
             _connected[id] = info;
+            
+            // ⚡ บันทึกเป็น persistent peer (เพื่อ auto-reconnect ในอนาคต)
+            _persistentPeers[id] = info;
+            print('💾 Added to persistent peers list (advertising side)');
             
             // รับการเชื่อมต่อ (ฝั่ง ADVERTISING เป็น responder)
             try {
@@ -592,8 +693,29 @@ class NearbyTransport implements Transport {
           },
           onDisconnected: (id) {
             print('❌ Disconnected (advertising): $id');
+            
+            // ⚡ ถ้าเป็น persistent peer → เก็บไว้ (ไม่ลบ) แค่ mark ว่า disconnected
+            final wasPersistent = _persistentPeers.containsKey(id);
+            if (wasPersistent) {
+              print('💾 Persistent peer disconnected - will keep for auto-reconnect');
+              _lostPeers[id] = DateTime.now();
+              // ไม่ลบจาก _persistentPeers
+            }
+            
             _connected.remove(id);
-            _found.remove(id);
+            
+            // ⚡ ถ้าเป็น cleanup disconnect (เพื่อ retry) → ไม่ลบจาก _found
+            if (_cleanupDisconnects.contains(id)) {
+              print('   This is a cleanup disconnect - keeping endpoint in _found for retry');
+              _cleanupDisconnects.remove(id);
+            } else if (!wasPersistent) {
+              // disconnect จริงๆ และไม่ใช่ persistent → ลบออกจาก _found
+              _found.remove(id);
+            } else {
+              // persistent peer → เก็บไว้ใน _found เพื่อแสดงใน UI (แต่ status = disconnected)
+              print('   Keeping persistent peer in _found for display');
+            }
+            
             _emitPeers();
           },
         );
@@ -623,6 +745,14 @@ class NearbyTransport implements Transport {
         
         print('✅ This is a different device, processing...');
         
+        // ⚡ ถ้าเคย lost ไป → ลบออกจาก lost list (กลับมาแล้ว!)
+        if (_lostPeers.containsKey(id)) {
+          final lostTime = _lostPeers[id]!;
+          final downDuration = DateTime.now().difference(lostTime);
+          print('🔄 Peer $id was lost for ${downDuration.inSeconds} seconds - reconnecting...');
+          _lostPeers.remove(id);
+        }
+        
         _found.add(id);
         
         // ตรวจสอบว่ากำลัง connecting อยู่หรือเชื่อมต่อแล้วหรือไม่
@@ -637,46 +767,83 @@ class NearbyTransport implements Transport {
           return;
         }
         
-        // ⚠️ ป้องกัน bidirectional request: ใช้ชื่ออุปกรณ์เป็นตัวตัดสิน
-        // เฉพาะฝั่งที่มีชื่อ "น้อยกว่า" (alphabetically) เท่านั้นที่จะ request
-        // (ฝั่งที่มีชื่อ "มากกว่า" จะรอรับการเชื่อมต่อจาก advertising side)
-        final myHashCode = deviceName.hashCode;
-        final peerHashCode = name.hashCode; // ใช้ชื่อของ peer แทน id
-        
-        if (myHashCode >= peerHashCode) {
-          print('⏳ My name hash ($myHashCode) >= Peer name hash ($peerHashCode)');
-          print('   My name: "$deviceName", Peer name: "$name"');
-          print('   Waiting for peer to initiate connection (I will accept via advertising)');
-          // ไม่ request - รอให้อีกฝั่ง request มาหาเรา
-          return;
+        // ⚡ ถ้าเป็น persistent peer → ให้ priority สูง (reconnect เลย)
+        final isPersistent = _persistentPeers.containsKey(id);
+        if (isPersistent) {
+          print('⭐ Persistent peer detected - auto-reconnecting immediately');
         }
         
-        print('✅ My name hash ($myHashCode) < Peer name hash ($peerHashCode)');
-        print('   My name: "$deviceName", Peer name: "$name"');
+        // ⚠️ ป้องกัน bidirectional request: ใช้ชื่ออุปกรณ์เปรียบเทียบ
+        // ฝั่งที่มีชื่อ "น้อยกว่า" (alphabetically) จะเป็นผู้ request
+        // ฝั่งที่มีชื่อ "มากกว่า" จะรอรับการเชื่อมต่อ
+        final comparison = deviceName.compareTo(name);
+        
+        if (comparison > 0 && !isPersistent) {
+          // deviceName > name → ฉันมีชื่อมากกว่า → รอให้อีกฝั่ง request (ยกเว้น persistent peers)
+          print('⏳ My name "$deviceName" > Peer name "$name"');
+          print('   Waiting for peer to initiate connection (I will accept via advertising)');
+          return;
+        } else if (comparison == 0 && !isPersistent) {
+          // ชื่อเหมือนกัน (ไม่ควรเกิด แต่ป้องกันไว้) → ใช้ ID เป็นตัวตัดสิน
+          final idComparison = deviceName.hashCode.compareTo(id.hashCode);
+          if (idComparison >= 0) {
+            print('⏳ Same name - using ID comparison → waiting');
+            return;
+          }
+        }
+        
+        print('✅ My name "$deviceName" < Peer name "$name" ${isPersistent ? "(or persistent peer)" : ""}');
         print('   I will initiate connection');
         
         // เพิ่มใน pending list
         _pendingConnections.add(id);
         
-        // รอสักครู่ก่อน request (ป้องกัน race condition)
-        // ให้ฝั่ง advertising มีเวลา ready รับ connection
-        Future.delayed(const Duration(milliseconds: 500), () {
-          // ตรวจสอบอีกครั้งว่ายังไม่ได้เชื่อมต่อ
-          if (_connected.containsKey(id)) {
-            print('✅ Already connected to $id during delay, skip request');
+        // ⚡ ลด delay สำหรับ persistent peers (500ms แทน 1000ms)
+        final delay = isPersistent ? 500 : 1000;
+        print('📡 Endpoint found: $id (name: $name) - รอ ${delay}ms ให้ advertising พร้อม...');
+        
+        Future.delayed(Duration(milliseconds: delay), () {
+          // ตรวจสอบว่า endpoint ยังอยู่ไหม
+          if (!_found.contains(id)) {
+            print('⚠️ Endpoint $id หายไปแล้ว - ยกเลิกการเชื่อมต่อ');
             _pendingConnections.remove(id);
             return;
           }
           
-          // ลองเชื่อมทันที
-          print('📞 Requesting connection to $id...');
+          // ตรวจสอบอีกครั้งว่ายังไม่ได้เชื่อมต่อ
+          if (_connected.containsKey(id)) {
+            print('✅ Already connected to $id during delay, skip request');
+            _pendingConnections.remove(id);
+            _emitPeers(); // ⚡ emit ทันทีเมื่อพบว่า connected แล้ว
+            return;
+          }
+          
+          // ลองเชื่อมต่อ
+          print('📞 Requesting connection to $id (after ${delay}ms delay - advertising should be ready)...');
           _doRequestConnection(id);
         });
+        
+        _emitPeers();
       },
       onEndpointLost: (id) {
+        if (id == null) return;
+        
         print('🔴 Lost endpoint: $id');
-        _found.remove(id);
-        _connected.remove(id);
+        
+        // ⚡ ถ้าเคยเชื่อมต่อแล้ว → เก็บไว้ใน persistent peers (ไม่ลบทันที)
+        if (_connected.containsKey(id)) {
+          print('💾 Keeping peer $id in persistent list - will auto-reconnect if found again');
+          _persistentPeers[id] = _connected[id]!;
+          _lostPeers[id] = DateTime.now();
+          
+          // ⚡ ไม่ลบจาก _connected ทันที - ให้ onDisconnected จัดการ
+          // ไม่ลบจาก _found เพื่อให้ยังแสดงใน UI (แต่ mark ว่าหายชั่วคราว)
+        } else {
+          // ถ้ายังไม่เคยเชื่อมต่อ (เจอแต่ยังไม่ได้ connect) → ลบได้เลย
+          print('   Peer was not connected - removing from _found');
+          _found.remove(id);
+        }
+        
         _emitPeers();
       },
     );
@@ -688,16 +855,23 @@ class NearbyTransport implements Transport {
       _isAdvertising = false;
       _isDiscovering = false;
       
-      // ถ้าเจอ ALREADY_DISCOVERING error ให้ force stop
+      // ถ้าเจอ ALREADY_DISCOVERING error ให้ force stop และลองใหม่
       if (e.toString().contains('ALREADY_DISCOVERING') || e.toString().contains('8002')) {
-        print('⚠️ Already discovering - force stopping...');
+        print('⚠️ Already discovering - force stopping and retrying...');
         try {
           await Nearby().stopDiscovery();
           await Nearby().stopAdvertising();
+          // ⚡ ลด delay จาก 1500ms → 1000ms
+          await Future.delayed(const Duration(milliseconds: 1000));
+          
+          // ลองเริ่มใหม่อีกครั้ง (recursive call)
+          print('🔄 Retrying discovery after cleanup...');
+          return await startDiscovery();
         } catch (stopError) {
           print('⚠️ Error during force stop: $stopError');
+          // ถ้ายังไม่ได้ ให้ throw error เพื่อบอกว่าต้องลองใหม่ทีหลัง
+          throw Exception('Failed to start discovery. Please try again.');
         }
-        throw Exception('Discovery session was already active. Stopped it. Please try scanning again.');
       }
       rethrow;
     }
@@ -841,6 +1015,16 @@ class NearbyTransport implements Transport {
     _found.clear();
     _connected.clear();
     _pendingConnections.clear();
+    _emitPeers();
+  }
+
+  /// 🆕 บังคับลบ persistent peer (ถ้าผู้ใช้ต้องการลบถาวร)
+  void removePersistentPeer(String peerId) {
+    print('🗑️ Removing persistent peer: $peerId');
+    _persistentPeers.remove(peerId);
+    _lostPeers.remove(peerId);
+    _connected.remove(peerId);
+    _found.remove(peerId);
     _emitPeers();
   }
 

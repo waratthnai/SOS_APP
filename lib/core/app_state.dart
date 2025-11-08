@@ -22,6 +22,7 @@ import 'fcm_service.dart'; // เพิ่ม FCM Service
 import '../ui/emergency_chat_screen.dart'; // เพิ่มสำหรับเปิดหน้าแชท
 import '../ui/friend_chat_screen.dart'; // เพิ่มสำหรับเปิดหน้าแชทเพื่อน
 import '../main.dart'; // เพิ่มสำหรับ navigatorKey
+import '../services/background_service.dart'; // เพิ่ม Background Service
 
 // 📍 Model สำหรับเก็บตำแหน่ง GPS ของ peer
 class PeerLocation {
@@ -64,9 +65,18 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   int _reconnectAttempts = 0; // 🔁 นับจำนวนครั้งที่พยายามเชื่อมต่อใหม่
   static const int _maxReconnectAttempts = 5; // 🔁 จำนวนครั้งสูงสุด
   
-  // 📍 GPS Locations ของ peers
+  // � Background Service
+  final BackgroundService _backgroundService = BackgroundService();
+  bool _isBackgroundServiceEnabled = false;
+  bool get isBackgroundServiceEnabled => _isBackgroundServiceEnabled;
+  
+  // �📍 GPS Locations ของ peers
   final Map<String, PeerLocation> _peerLocations = {};
   
+  // 🔒 ป้องกันการกดปุ่มซ้ำ
+  bool _isTogglingRescue = false;
+  bool _isTogglingSOS = false;
+
   // 🚑 โหมดหน่วยกู้ภัย (Rescue Mode)
   bool _isRescueMode = false;
   bool get isRescueMode => _isRescueMode;
@@ -75,6 +85,21 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   bool _isSOSActive = false;
   bool get isSOSActive => _isSOSActive;
 
+  // 📡 Auto-Discovery Mode (Passive Listening)
+  bool _isPassiveListening = false;
+  bool get isPassiveListening => _isPassiveListening;
+
+  // 🔄 Stable Peer List - เก็บ peers ที่เคยพบไว้ชั่วคราว
+  final Map<String, Peer> _stablePeers = {};
+  Timer? _peerCleanupTimer;
+  final Map<String, DateTime> _peerLastSeen = {};
+  // 💓 เพิ่ม timeout เป็น 45 วินาที (Keep Alive ส่งทุก 30 วินาที + buffer 15 วินาที)
+  // เพื่อให้มั่นใจว่าไม่ timeout ก่อนรับ Keep Alive ครั้งถัดไป
+  static const Duration _peerTimeout = Duration(seconds: 45);
+
+  // Getter สำหรับ stable peers
+  UnmodifiableListView<Peer> get stablePeers => UnmodifiableListView(_stablePeers.values);
+
   AppState({required this.transport}) {
     _subs();
     _loadLocalMessages();
@@ -82,6 +107,76 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     _initFriendService();
     // เริ่มฟัง App Lifecycle
     WidgetsBinding.instance.addObserver(this);
+    // 🔄 เริ่ม Passive Listening อัตโนมัติ (หลังจากรอให้ app พร้อม)
+    Future.delayed(const Duration(milliseconds: 500), () {
+      _startPassiveListening();
+    });
+  }
+  
+  /// 📡 เริ่ม Passive Listening - รับสัญญาณได้โดยไม่ต้องเปิดโหมดใดๆ
+  Future<void> _startPassiveListening() async {
+    if (_isPassiveListening) {
+      debugPrint('⏭️ Passive Listening already active, skip');
+      return;
+    }
+    
+    try {
+      debugPrint('📡 [PASSIVE] เริ่ม Passive Listening Mode...');
+      debugPrint('📡 [PASSIVE] Device name: "$_deviceName"');
+      await startScan();
+      _isPassiveListening = true;
+      debugPrint('✅ [PASSIVE] Passive Listening เริ่มทำงานแล้ว - พร้อมรับสัญญาณ SOS');
+    } catch (e) {
+      debugPrint('❌ [PASSIVE] Error starting passive listening: $e');
+      
+      // ⚡ ลด retry delay จาก 3 วินาที → 2 วินาที
+      if (e.toString().contains('Failed to start discovery')) {
+        debugPrint('🔄 [PASSIVE] จะลองเริ่ม Passive Listening ใหม่ในอีก 2 วินาที...');
+        Future.delayed(const Duration(seconds: 2), () {
+          if (!_isPassiveListening) {
+            _startPassiveListening();
+          }
+        });
+      }
+    }
+  }
+
+  /// 🔄 อัปเดต Stable Peers List - เก็บ peers ที่เคยเห็นไว้ชั่วคราว
+  void _updateStablePeers(List<Peer> currentPeers) {
+    final now = DateTime.now();
+    bool hasChanges = false;
+    
+    // เพิ่ม/อัปเดต peers ที่เห็นอยู่
+    for (final peer in currentPeers) {
+      if (!_stablePeers.containsKey(peer.id)) {
+        hasChanges = true;
+        debugPrint('✅ เพิ่ม stable peer: ${peer.name} (${peer.id})');
+      }
+      _stablePeers[peer.id] = peer;
+      _peerLastSeen[peer.id] = now;
+    }
+    
+    // ลบ peers ที่ไม่เห็นนานเกินไป (15 วินาที)
+    _peerLastSeen.removeWhere((peerId, lastSeen) {
+      if (now.difference(lastSeen) > _peerTimeout) {
+        _stablePeers.remove(peerId);
+        debugPrint('🔄 ลบ peer $peerId (timeout after ${_peerTimeout.inSeconds}s)');
+        hasChanges = true;
+        return true;
+      }
+      return false;
+    });
+    
+    // ⚡ เพิ่ม cleanup frequency จาก 10 วินาที → 5 วินาที
+    // เพื่อให้ UI อัปเดตไวขึ้น
+    _peerCleanupTimer ??= Timer.periodic(const Duration(seconds: 5), (_) {
+      _updateStablePeers([]); // เรียกเพื่อทำ cleanup
+    });
+    
+    // ⚡ แจ้ง UI ทันทีเมื่อมีการเปลี่ยนแปลง
+    if (hasChanges) {
+      notifyListeners();
+    }
   }
 
   // Getter และ Setter สำหรับชื่อเครื่อง
@@ -96,32 +191,54 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   
   // 🚑 เปิด/ปิด โหมดหน่วยกู้ภัย
   Future<void> toggleRescueMode() async {
-    _isRescueMode = !_isRescueMode;
-    
+  // 🔒 ป้องกันการกดซ้ำ
+  if (_isTogglingRescue) {
+    debugPrint('⚠️ กำลังประมวลผลอยู่ กรุณารอสักครู่...');
+    return;
+  }
+  
+  _isTogglingRescue = true;
+  _isRescueMode = !_isRescueMode;
+  debugPrint('🔍 [DEBUG] toggleRescueMode: _isRescueMode = $_isRescueMode');
+  
+  try {
     // ⚠️ ถ้าเปิด Rescue Mode ให้ปิด SOS Mode อัตโนมัติ
     if (_isRescueMode && _isSOSActive) {
       debugPrint('⚠️ ปิด SOS Mode เพื่อเปิด Rescue Mode');
       _isSOSActive = false;
       await broadcastSOSStatus(isActive: false);
-      // หยุดการสแกนของโหมด SOS
-      await stopScan();
     }
     
-    // Broadcast สถานะหน่วยกู้ภัยไปยังอุปกรณ์ใกล้เคียง
-    if (_isRescueMode) {
-      await _broadcastRescueStatus(true);
-      // 🔄 เริ่มสแกนอัตโนมัติแบบต่อเนื่อง
-      await startScan();
-      debugPrint('🚑 เปิดโหมดหน่วยกู้ภัย + เริ่มสแกนอัตโนมัติ');
-    } else {
-      await _broadcastRescueStatus(false);
-      // หยุดการสแกน
-      await stopScan();
-      debugPrint('🚑 ปิดโหมดหน่วยกู้ภัย + หยุดสแกน');
-    }
-    
+    // 🔄 อัพเดท UI ทันที
     notifyListeners();
+    
+    // Broadcast สถานะหน่วยกู้ภัย
+    if (_isRescueMode) {
+      debugPrint('🚑 กำลังเปิดโหมดหน่วยกู้ภัย...');
+      await _broadcastRescueStatus(true);
+      
+      // ✅ ไม่ต้อง stop/start scan เพราะ Passive Listening ทำงานอยู่แล้ว
+      // แค่ broadcast สถานะก็พอ
+      
+      debugPrint('🚑 ✅ เปิดโหมดหน่วยกู้ภัย (Passive Listening ทำงานต่อเนื่อง)');
+    } else {
+      debugPrint('🚑 กำลังปิดโหมดหน่วยกู้ภัย...');
+      await _broadcastRescueStatus(false);
+      // 📡 ไม่ stop scan เพื่อให้ Passive Listening ยังทำงาน
+      debugPrint('🚑 ✅ ปิดโหมดหน่วยกู้ภัย (Passive Listening ยังทำงาน)');
+    }
+    
+    // อัพเดท UI อีกครั้งหลัง operation เสร็จ
+    notifyListeners();
+  } catch (e) {
+    debugPrint('❌ Error in toggleRescueMode: $e');
+    // ถ้า error ให้ rollback state
+    _isRescueMode = !_isRescueMode;
+    notifyListeners();
+  } finally {
+    _isTogglingRescue = false;
   }
+}
   
   // Broadcast สถานะหน่วยกู้ภัย
   Future<void> _broadcastRescueStatus(bool isRescue) async {
@@ -134,60 +251,90 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   // 🚨 เปิด/ปิด โหมด SOS
   Future<void> toggleSOSMode() async {
-    _isSOSActive = !_isSOSActive;
-    debugPrint('🔍 [DEBUG] toggleSOSMode: _isSOSActive = $_isSOSActive');
-    
+  // 🔒 ป้องกันการกดซ้ำ
+  if (_isTogglingSOS) {
+    debugPrint('⚠️ กำลังประมวลผลอยู่ กรุณารอสักครู่...');
+    return;
+  }
+  
+  _isTogglingSOS = true;
+  _isSOSActive = !_isSOSActive;
+  debugPrint('🔍 [DEBUG] toggleSOSMode: _isSOSActive = $_isSOSActive');
+  
+  try {
     // ⚠️ ถ้าเปิด SOS Mode ให้ปิด Rescue Mode อัตโนมัติ
     if (_isSOSActive && _isRescueMode) {
       debugPrint('⚠️ ปิด Rescue Mode เพื่อเปิด SOS Mode');
       _isRescueMode = false;
       await _broadcastRescueStatus(false);
-      // หยุดการสแกนของโหมดกู้ภัย
-      await stopScan();
     }
+    
+    // 🔄 อัพเดท UI ทันที
+    notifyListeners();
     
     if (_isSOSActive) {
-      debugPrint('🔍 [DEBUG] กำลังเปิดโหมด SOS...');
-      // ดึงตำแหน่งปัจจุบัน
-      Position? position = await _getCurrentLocation();
+      debugPrint('🚨 เปิดโหมด SOS - broadcast SOS_MODE_ON');
       
-      // Broadcast SOS พร้อมพิกัด
-      await broadcastSOSStatus(
-        isActive: true,
-        latitude: position?.latitude,
-        longitude: position?.longitude,
-      );
+      // Broadcast โหมด SOS ทันที (ไม่ต้องรอ location - ใช้ค่า null ก่อน)
+      await _broadcastSOSMode(isActive: true);
       
-      // 🔄 เริ่มสแกนอัตโนมัติแบบต่อเนื่อง
-      await startScan();
-      debugPrint('🚨 เปิดโหมด SOS + เริ่มสแกนอัตโนมัติ');
+      debugPrint('🚨 ✅ เปิดโหมด SOS (Passive Listening ทำงานต่อเนื่อง)');
     } else {
-      debugPrint('🔍 [DEBUG] กำลังปิดโหมด SOS...');
-      await broadcastSOSStatus(isActive: false);
-      // หยุดการสแกน
-      await stopScan();
-      debugPrint('🚨 ปิดโหมด SOS + หยุดสแกน');
+      debugPrint('🚨 กำลังปิดโหมด SOS...');
+      // เมื่อปิดโหมด SOS ให้ broadcast ว่าปิดแล้ว
+      await _broadcastSOSMode(isActive: false);
+      debugPrint('🚨 ✅ ปิดโหมด SOS');
     }
     
+    // อัพเดท UI อีกครั้งหลัง operation เสร็จ
     notifyListeners();
+  } catch (e) {
+    debugPrint('❌ Error in toggleSOSMode: $e');
+    // ถ้า error ให้ rollback state
+    _isSOSActive = !_isSOSActive;
+    notifyListeners();
+  } finally {
+    _isTogglingSOS = false;
+  }
+}
+
+  // 🚨 Broadcast โหมด SOS (เข้า/ออกโหมด - ยังไม่ขอความช่วยเหลือ)
+  Future<void> _broadcastSOSMode({
+    required bool isActive,
+    double? latitude,
+    double? longitude,
+  }) async {
+    final status = isActive ? 'SOS_MODE_ON' : 'SOS_MODE_OFF';
+    
+    // ใช้ location ที่ส่งมา หรือ 0,0 (ไม่บังคับต้องมี location สำหรับ SOS Mode)
+    final lat = latitude ?? 0.0;
+    final lng = longitude ?? 0.0;
+    
+    final message = 'SOS_STATUS:$_deviceName:$status:$lat:$lng:0'; // timestamp = 0
+    debugPrint('📡 Broadcast SOS Mode: $message');
+    
+    await transport.sendMessage(message);
   }
 
-  // 🚨 Broadcast สถานะ SOS พร้อมพิกัด GPS
+  // 🚨 Broadcast สถานะ SOS (กดปุ่มขอความช่วยเหลือ)
   Future<void> broadcastSOSStatus({
     required bool isActive,
     double? latitude,
     double? longitude,
   }) async {
     final status = isActive ? 'SOS_ACTIVE' : 'SOS_INACTIVE';
+    final timestamp = DateTime.now().millisecondsSinceEpoch.toString();
     
     String message;
     if (latitude != null && longitude != null) {
-      message = 'SOS_STATUS:$_deviceName:$status:$latitude:$longitude';
+      message = 'SOS_STATUS:$_deviceName:$status:$latitude:$longitude:$timestamp';
       debugPrint('📡 Broadcast SOS: $message');
       debugPrint('📍 Location: https://www.google.com/maps?q=$latitude,$longitude');
+      debugPrint('⏰ Timestamp: ${DateTime.now()}');
     } else {
-      message = 'SOS_STATUS:$_deviceName:$status';
+      message = 'SOS_STATUS:$_deviceName:$status:0:0:$timestamp';
       debugPrint('📡 Broadcast SOS (no location): $message');
+      debugPrint('⏰ Timestamp: ${DateTime.now()}');
     }
     
     await transport.sendMessage(message);
@@ -317,7 +464,10 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         ..clear()
         ..addAll(list);
       
-      // 🔁 Reset reconnect attempts เมื่อมี peer เชื่อมต่อสำเร็จ
+      // � อัปเดต Stable Peers List
+      _updateStablePeers(list);
+      
+      // �🔁 Reset reconnect attempts เมื่อมี peer เชื่อมต่อสำเร็จ
       if (list.isNotEmpty && _reconnectAttempts > 0) {
         _reconnectAttempts = 0;
         debugPrint('✅ เชื่อมต่อสำเร็จ - Reset reconnect attempts');
@@ -327,23 +477,26 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       if (list.length > oldPeersCount) {
         debugPrint('🔍 [DEBUG] มี peer ใหม่เชื่อมต่อ (${list.length} peers) → ส่งสถานะโหมดปัจจุบัน');
         
-        // ส่งสถานะ Rescue Mode (ถ้าเปิดอยู่)
-        if (_isRescueMode) {
-          debugPrint('🔍 [DEBUG] กำลังส่ง Rescue status หลังเชื่อมต่อใหม่...');
-          _broadcastRescueStatus(true);
-        }
-        
-        // ส่งสถานะ SOS Mode (ถ้าเปิดอยู่)
-        if (_isSOSActive) {
-          debugPrint('🔍 [DEBUG] กำลังส่ง SOS status หลังเชื่อมต่อใหม่...');
-          _getCurrentLocation().then((position) {
-            broadcastSOSStatus(
-              isActive: true,
-              latitude: position?.latitude,
-              longitude: position?.longitude,
-            );
-          });
-        }
+        // ⚡ ลด delay จาก 300ms → 200ms เพื่อความเร็ว
+        Future.delayed(const Duration(milliseconds: 200), () {
+          // ส่งสถานะ Rescue Mode (ถ้าเปิดอยู่)
+          if (_isRescueMode) {
+            debugPrint('🔍 [DEBUG] กำลังส่ง Rescue status หลังเชื่อมต่อใหม่...');
+            _broadcastRescueStatus(true);
+          }
+          
+          // ส่งสถานะ SOS Mode (ถ้าเปิดอยู่)
+          if (_isSOSActive) {
+            debugPrint('🔍 [DEBUG] กำลังส่ง SOS status หลังเชื่อมต่อใหม่...');
+            _getCurrentLocation().then((position) {
+              broadcastSOSStatus(
+                isActive: true,
+                latitude: position?.latitude,
+                longitude: position?.longitude,
+              );
+            });
+          }
+        });
       }
       
       notifyListeners();
@@ -356,15 +509,19 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       // เป็น: ถ้าไม่ได้ login ก็ใช้ anonymous ID
       final currentUserId = friendService.currentUser?.id ?? 'anonymous';
       
-      // 💓 ตรวจสอบข้อความ Keep Alive (ไม่ต้องทำอะไร แค่รับรู้ว่ายังเชื่อมต่ออยู่)
+      // 💓 ตรวจสอบข้อความ Keep Alive (อัปเดต timestamp เพื่อไม่ให้ peer ถูก timeout)
       if (m.body.startsWith('KEEP_ALIVE:')) {
         debugPrint('💓 Keep Alive received from ${m.fromPeerId}');
+        // ⚡ อัปเดต lastSeen เพื่อไม่ให้ stable peer timeout
+        _peerLastSeen[m.fromPeerId] = DateTime.now();
         return;
       }
       
       // 📍 ตรวจสอบข้อความ GPS location (ต้องเช็คก่อนเพื่อไม่ให้บันทึกลง chat)
       if (m.body.startsWith('GPS_LOC:')) {
         _handleGPSLocation(m.body, m.fromPeerId);
+        // ⚡ อัปเดต lastSeen
+        _peerLastSeen[m.fromPeerId] = DateTime.now();
         return; // ❗ สำคัญ: return ทันทีเพื่อไม่ให้ไปบันทึกใน ChatMessage
       }
       
@@ -372,6 +529,8 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       if (m.body.startsWith('RESCUE_STATUS:')) {
         debugPrint('🔍 [DEBUG] ✅ พบข้อความ RESCUE_STATUS! กำลังเรียก _handleRescueStatus()');
         _handleRescueStatus(m.body, m.fromPeerId);
+        // ⚡ อัปเดต lastSeen
+        _peerLastSeen[m.fromPeerId] = DateTime.now();
         return;
       }
       
@@ -379,6 +538,8 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       if (m.body.startsWith('SOS_STATUS:')) {
         debugPrint('🔍 [DEBUG] ✅ พบข้อความ SOS_STATUS! กำลังเรียก _handleSOSStatus()');
         _handleSOSStatus(m.body, m.fromPeerId);
+        // ⚡ อัปเดต lastSeen
+        _peerLastSeen[m.fromPeerId] = DateTime.now();
         return;
       }
       
@@ -401,6 +562,9 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       } else if (m.fromPeerId != 'me') {
         // ⚠️ เพิ่มเงื่อนไข: ไม่รับข้อความจากตัวเอง
         // ข้อความทั่วไป/ฉุกเฉิน - ไม่ต้อง login
+        
+        // ⚡ อัปเดต lastSeen สำหรับ chat messages
+        _peerLastSeen[m.fromPeerId] = DateTime.now();
         
         // หา peer name จาก peers list
         final peer = _peers.firstWhere(
@@ -514,7 +678,10 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  Future<void> startScan() => transport.startDiscovery();
+  Future<void> startScan() {
+    debugPrint('🔍 [AppState] startScan() called - Device name: "$_deviceName"');
+    return transport.startDiscovery();
+  }
   Future<void> stopScan() => transport.stopDiscovery();
 
   Future<void> send(String body, {Peer? to}) async {
@@ -1176,12 +1343,19 @@ void addChatVideo(String path, {String? receiverId}) async {
   
   /// 🚨 รับสถานะ SOS จากเครื่องอื่น
   void _handleSOSStatus(String message, String fromPeerId) {
-    // Format: "SOS_STATUS:deviceName:status:lat:lng"
+    // Format: "SOS_STATUS:deviceName:status:lat:lng:timestamp"
     final parts = message.split(':');
     if (parts.length >= 3 && parts[0] == 'SOS_STATUS') {
       final deviceName = parts[1];
       final status = parts[2];
-      final isSOS = status == 'SOS_ACTIVE';
+      
+      // แยก status ออกเป็น 3 แบบ:
+      // - SOS_MODE_ON = เข้าโหมด SOS (แสดงสีแดง แต่ไม่กระพริบ)
+      // - SOS_ACTIVE = กดปุ่มขอความช่วยเหลือ (แสดงสีแดง + กระพริบ + เวลา)
+      // - SOS_INACTIVE/SOS_MODE_OFF = ปิด SOS
+      
+      final isSOSMode = status == 'SOS_MODE_ON';
+      final isSOSActive = status == 'SOS_ACTIVE';
       
       // ดึงพิกัด GPS ถ้ามี
       String? latitude;
@@ -1191,26 +1365,80 @@ void addChatVideo(String path, {String? receiverId}) async {
         longitude = parts[4];
       }
       
-      debugPrint('🚨 ${isSOS ? "เปิด" : "ปิด"} SOS: $deviceName ($fromPeerId)');
+      // ดึง timestamp ถ้ามี (เฉพาะ SOS_ACTIVE)
+      DateTime? sosTimestamp;
+      if (parts.length >= 6) {
+        final timestampMs = int.tryParse(parts[5]);
+        if (timestampMs != null && timestampMs > 0) {
+          sosTimestamp = DateTime.fromMillisecondsSinceEpoch(timestampMs);
+        }
+      }
+      
+      debugPrint('🚨 Status: $status from $deviceName ($fromPeerId)');
       if (latitude != null && longitude != null) {
         debugPrint('📍 Location: $latitude, $longitude');
       }
+      if (sosTimestamp != null) {
+        debugPrint('⏰ SOS Timestamp: $sosTimestamp');
+      }
       
       // อัพเดท peer metadata
-      _sosPeers[fromPeerId] = isSOS;
-      
-      // แจ้งเตือนแบบด่วน
-      if (isSOS) {
+      if (isSOSMode) {
+        // เข้าโหมด SOS - แสดงสีแดงแต่ไม่กระพริบ
+        _sosModePeers[fromPeerId] = true;
+        _sosPeers.remove(fromPeerId); // ❌ ลบออกเพราะยังไม่มี timestamp (ไม่ได้กดปุ่ม)
+        debugPrint('🚨 $deviceName เข้าโหมด SOS (ยังไม่ขอความช่วยเหลือ)');
+        
+        // 🔔 แจ้งเตือนเมื่อพบอุปกรณ์เข้าโหมด SOS (แต่ยังไม่ขอความช่วยเหลือ)
+        String locationInfo = '';
+        if (latitude != null && longitude != null && latitude != '0.0' && longitude != '0.0') {
+          locationInfo = '\n📍 ตำแหน่ง: https://www.google.com/maps?q=$latitude,$longitude';
+        }
+        
+        // แสดง In-App notification
+        NotificationService().showInAppNotification(
+          title: '⚠️ พบอุปกรณ์ขอความช่วยเหลือ SOS',
+          message: '$deviceName ต้องการความช่วยเหลือ$locationInfo',
+          type: NotificationType.warning,
+        );
+        
+        // 🔔 แสดง System notification
+        _showSOSModeNotification(
+          senderName: deviceName,
+          latitude: latitude != null ? double.tryParse(latitude) : null,
+          longitude: longitude != null ? double.tryParse(longitude) : null,
+        );
+      } else if (isSOSActive) {
+        // กดปุ่ม SOS - แสดงสีแดง + กระพริบ + เวลา
+        _sosModePeers[fromPeerId] = true;
+        _sosPeers[fromPeerId] = sosTimestamp ?? DateTime.now();
+        debugPrint('🚨 $deviceName กดปุ่ม SOS - ขอความช่วยเหลือ!');
+        
+        // แจ้งเตือนเฉพาะตอนกดปุ่ม SOS
         String locationInfo = '';
         if (latitude != null && longitude != null) {
           locationInfo = '\n📍 Location: https://www.google.com/maps?q=$latitude,$longitude';
         }
         
+        // แสดง In-App notification
         NotificationService().showInAppNotification(
-          title: '🚨 SOS! ขอความช่วยเหลือ',
+          title: '🚨 SOS! ขอความช่วยเหลือด่วน!',
           message: '$deviceName ต้องการความช่วยเหลือเร่งด่วน!$locationInfo',
           type: NotificationType.emergency,
         );
+        
+        // 🔔 แสดง Background notification ด้วย
+        _showSOSNotification(
+          senderName: deviceName,
+          message: 'ต้องการความช่วยเหลือเร่งด่วน!',
+          latitude: latitude != null ? double.tryParse(latitude) : null,
+          longitude: longitude != null ? double.tryParse(longitude) : null,
+        );
+      } else {
+        // ปิด SOS
+        _sosModePeers.remove(fromPeerId);
+        _sosPeers.remove(fromPeerId);
+        debugPrint('🚨 $deviceName ปิดโหมด SOS');
       }
       
       notifyListeners();
@@ -1220,8 +1448,11 @@ void addChatVideo(String path, {String? receiverId}) async {
   // เก็บสถานะหน่วยกู้ภัยของแต่ละ peer
   final Map<String, bool> _rescuePeers = {};
   
-  // เก็บสถานะ SOS ของแต่ละ peer
-  final Map<String, bool> _sosPeers = {};
+  // เก็บว่า peer ไหนอยู่ในโหมด SOS (แต่ยังไม่ได้กดปุ่มขอความช่วยเหลือ)
+  final Map<String, bool> _sosModePeers = {}; // peerId -> true = อยู่ในโหมด SOS
+  
+  // เก็บสถานะ SOS ของแต่ละ peer พร้อมเวลาที่กด SOS (ขอความช่วยเหลือแล้ว)
+  final Map<String, DateTime?> _sosPeers = {}; // peerId -> เวลาที่กด SOS (null = ยังไม่ได้กด)
   
   // 🌐 Mesh Network: เก็บ ID ข้อความที่เคยส่งต่อแล้ว (ป้องกันการส่งซ้ำ)
   final Set<String> _forwardedMessages = {};
@@ -1233,7 +1464,13 @@ void addChatVideo(String path, {String? receiverId}) async {
   
   // Getters สำหรับ UI
   bool isRescuePeer(String peerId) => _rescuePeers[peerId] ?? false;
-  bool isSOSPeer(String peerId) => _sosPeers[peerId] ?? false;
+  bool isSOSModePeer(String peerId) => _sosModePeers[peerId] ?? false; // อยู่ในโหมด SOS
+  bool isSOSPeer(String peerId) {
+    // ต้องเช็คว่ามี key และ value ไม่เป็น null (กดปุ่ม SOS แล้ว)
+    final timestamp = _sosPeers[peerId];
+    return timestamp != null; // return true เฉพาะตอนมี timestamp จริงๆ
+  }
+  DateTime? getSOSTimestamp(String peerId) => _sosPeers[peerId]; // ดึงเวลาที่กด SOS
   Map<String, bool> get rescuePeers => Map.unmodifiable(_rescuePeers);
   
   // เช็คว่า peer เป็นหน่วยกู้ภัยหรือไม่
@@ -1940,12 +2177,83 @@ void addChatVideo(String path, {String? receiverId}) async {
     _openFriendChatScreen(friend);
   }
 
+  // 🔄 Background Service Methods
+  
+  /// เปิด Background Service
+  Future<void> startBackgroundService() async {
+    try {
+      await _backgroundService.initialize();
+      final success = await _backgroundService.startService();
+      
+      if (success) {
+        _isBackgroundServiceEnabled = true;
+        debugPrint('✅ Background Service เริ่มทำงานแล้ว');
+      } else {
+        debugPrint('❌ ไม่สามารถเริ่ม Background Service ได้');
+      }
+      
+      notifyListeners();
+    } catch (e) {
+      debugPrint('❌ Error starting background service: $e');
+    }
+  }
+  
+  /// ปิด Background Service
+  Future<void> stopBackgroundService() async {
+    try {
+      final success = await _backgroundService.stopService();
+      
+      if (success) {
+        _isBackgroundServiceEnabled = false;
+        debugPrint('⏹️ Background Service หยุดทำงานแล้ว');
+      }
+      
+      notifyListeners();
+    } catch (e) {
+      debugPrint('❌ Error stopping background service: $e');
+    }
+  }
+  
+  /// แสดง SOS notification เมื่อได้รับข้อความ SOS
+  Future<void> _showSOSNotification({
+    required String senderName,
+    String? message,
+    double? latitude,
+    double? longitude,
+  }) async {
+    if (_isBackgroundServiceEnabled) {
+      await _backgroundService.showSOSNotification(
+        senderName: senderName,
+        message: message,
+        latitude: latitude,
+        longitude: longitude,
+      );
+    }
+  }
+
+  /// 🔔 แจ้งเตือนเมื่อพบอุปกรณ์เข้าโหมด SOS (ยังไม่ได้กดปุ่มขอความช่วยเหลือ)
+  Future<void> _showSOSModeNotification({
+    required String senderName,
+    double? latitude,
+    double? longitude,
+  }) async {
+    if (_isBackgroundServiceEnabled) {
+      await _backgroundService.showSOSNotification(
+        senderName: senderName,
+        message: 'อยู่ในโหมดฉุกเฉิน - อาจต้องการความช่วยเหลือ',
+        latitude: latitude,
+        longitude: longitude,
+      );
+    }
+  }
+
   @override
   void dispose() {
     _stopOnlineStatusUpdates();
     _locationBroadcastTimer?.cancel();
     _keepAliveTimer?.cancel();
     _reconnectTimer?.cancel();
+    stopBackgroundService(); // ปิด Background Service
     WidgetsBinding.instance.removeObserver(this);
     transport.dispose();
     super.dispose();
