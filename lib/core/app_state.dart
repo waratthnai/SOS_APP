@@ -591,7 +591,8 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
           status: MessageStatus.delivered, // ได้รับข้อความแล้ว
         );
         _messages.add(m);
-        _chatMessages.add(msg);
+        // 🔥 สร้าง List ใหม่แทนการ add
+        _chatMessages = [..._chatMessages, msg];
         
         // เก็บ local (ถ้า login แล้วก็เก็บด้วย userId, ถ้าไม่ก็เก็บด้วย anonymous)
         ChatDB.insertMessage(msg, currentUserId, receiver: myDeviceId);
@@ -649,7 +650,8 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
           isEmergency: false,
         );
         
-        _chatMessages.add(msg);
+        // 🔥 สร้าง List ใหม่แทนการ add
+        _chatMessages = [..._chatMessages, msg];
         
         // เก็บ local
         ChatDB.insertMessage(msg, currentUserId, receiver: myDeviceId);
@@ -714,7 +716,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   // ====== Chat ======
-  final List<ChatMessage> _chatMessages = [];
+  List<ChatMessage> _chatMessages = []; // 🔥 เปลี่ยนจาก final เป็น var เพื่อให้สามารถสร้าง List ใหม่ได้
   UnmodifiableListView<ChatMessage> get chatMessages => UnmodifiableListView(_chatMessages);
 
   /// ดึงข้อความในห้องแชทระหว่าง user กับ peer
@@ -743,7 +745,8 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     isEmergency: text.contains('SOS') || text.contains('ฉุกเฉิน'),
     status: MessageStatus.pending, // เริ่มต้นเป็น pending
   );
-  _chatMessages.add(msg);
+  // 🔥 สร้าง List ใหม่แทนการ add
+  _chatMessages = [..._chatMessages, msg];
   
   // กำหนด receiver: ถ้าไม่ได้ระบุ ให้ใช้ peer แรกที่เชื่อมต่ออยู่
   String? actualReceiverId = receiverId;
@@ -836,7 +839,8 @@ void addChatImage(String path, {String? receiverId}) async {
     filePath: path,
     time: DateTime.now(),
   );
-  _chatMessages.add(msg);
+  // 🔥 สร้าง List ใหม่แทนการ add
+  _chatMessages = [..._chatMessages, msg];
   ChatDB.insertMessage(msg, friendService.currentUser!.id, receiver: receiverId); // เก็บ local พร้อม userId
   firebaseService.saveChatMessage(
     type: 'image',
@@ -865,7 +869,8 @@ void addChatVideo(String path, {String? receiverId}) async {
     filePath: path,
     time: DateTime.now(),
   );
-  _chatMessages.add(msg);
+  // 🔥 สร้าง List ใหม่แทนการ add
+  _chatMessages = [..._chatMessages, msg];
   ChatDB.insertMessage(msg, friendService.currentUser!.id, receiver: receiverId); // เก็บ local พร้อม userId
   firebaseService.saveChatMessage(
     type: 'video',
@@ -955,7 +960,8 @@ void addChatVideo(String path, {String? receiverId}) async {
     if (!_friendChats.containsKey(friendUserId)) {
       _friendChats[friendUserId] = [];
     }
-    _friendChats[friendUserId]!.add(message);
+    // 🔥 สร้าง List ใหม่แทนการ add ลงใน List เดิม
+    _friendChats[friendUserId] = [..._friendChats[friendUserId]!, message];
 
     // บันทึกลงฐานข้อมูลท้องถิ่น
     await FriendDB.saveFriendChatMessage(friendUserId, message.toJson());
@@ -1015,7 +1021,8 @@ void addChatVideo(String path, {String? receiverId}) async {
     if (!_friendChats.containsKey(friendUserId)) {
       _friendChats[friendUserId] = [];
     }
-    _friendChats[friendUserId]!.add(message);
+    // 🔥 สร้าง List ใหม่แทนการ add ลงใน List เดิม
+    _friendChats[friendUserId] = [..._friendChats[friendUserId]!, message];
 
     // บันทึกลงฐานข้อมูลท้องถิ่น
     await FriendDB.saveFriendChatMessage(friendUserId, message.toJson());
@@ -1067,7 +1074,8 @@ void addChatVideo(String path, {String? receiverId}) async {
     if (!_friendChats.containsKey(friendUserId)) {
       _friendChats[friendUserId] = [];
     }
-    _friendChats[friendUserId]!.add(message);
+    // 🔥 สร้าง List ใหม่แทนการ add ลงใน List เดิม
+    _friendChats[friendUserId] = [..._friendChats[friendUserId]!, message];
 
     // บันทึกลงฐานข้อมูลท้องถิ่น
     await FriendDB.saveFriendChatMessage(friendUserId, message.toJson());
@@ -1221,7 +1229,8 @@ void addChatVideo(String path, {String? receiverId}) async {
         
         // เรียงตามเวลา
         messages.sort((a, b) => a.time.compareTo(b.time));
-        _friendChats[friendUserId] = messages;
+        // 🔥 สร้าง List ใหม่เพื่อบังคับให้ Flutter รู้ว่ามีการเปลี่ยนแปลง
+        _friendChats[friendUserId] = List.from(messages);
         debugPrint('[AppState] ✅ รวมข้อความทั้งหมด: ${messages.length} ข้อความ');
       } catch (e) {
         debugPrint('[AppState] Error loading Firebase messages: $e');
@@ -1255,7 +1264,8 @@ void addChatVideo(String path, {String? receiverId}) async {
       if (!_friendChats.containsKey(fromUserId)) {
         _friendChats[fromUserId] = [];
       }
-      _friendChats[fromUserId]!.add(friendMessage);
+      // 🔥 สร้าง List ใหม่แทนการ add ลงใน List เดิม
+      _friendChats[fromUserId] = [..._friendChats[fromUserId]!, friendMessage];
 
       // บันทึกลงฐานข้อมูลท้องถิ่น
       FriendDB.saveFriendChatMessage(fromUserId, friendMessage.toJson());
@@ -1798,7 +1808,8 @@ void addChatVideo(String path, {String? receiverId}) async {
       status: MessageStatus.delivered,
     );
     
-    _chatMessages.add(msg);
+    // 🔥 สร้าง List ใหม่แทนการ add
+    _chatMessages = [..._chatMessages, msg];
     
     // เก็บลง DB
     final currentUserId = friendService.currentUser?.id ?? 'anonymous';

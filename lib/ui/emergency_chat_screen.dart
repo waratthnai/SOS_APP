@@ -31,19 +31,35 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
   String _searchQuery = '';
   bool _showSearchBar = false; // 🔍 สถานะแสดง/ซ่อนแถบค้นหา
   final _picker = ImagePicker();
+  int _messageCount = 0; // ⚡ ติดตามจำนวนข้อความเพื่อ rebuild
 
   @override
   void initState() {
     super.initState();
     _scrollToBottom();
+    
+    // ⚡ ฟังการเปลี่ยนแปลงของ chatMessages เพื่อ rebuild
+    appState.addListener(_onMessagesChanged);
   }
 
   @override
   void dispose() {
+    appState.removeListener(_onMessagesChanged);
     _messageController.dispose();
     _scrollController.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  // ⚡ Callback เมื่อมีข้อความใหม่
+  void _onMessagesChanged() {
+    final newCount = appState.chatMessages.length;
+    if (newCount != _messageCount) {
+      setState(() {
+        _messageCount = newCount;
+      });
+      _scrollToBottom();
+    }
   }
 
   void _scrollToBottom() {
@@ -695,6 +711,7 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
             }
 
             return ListView.builder(
+              key: ValueKey('messages_${_messageCount}_${messages.length}'), // ⚡ บังคับ rebuild เมื่อมีข้อความใหม่
               controller: _scrollController,
               padding: const EdgeInsets.all(16),
               itemCount: messages.length,

@@ -29,6 +29,7 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
   bool _isRefreshing = false;
   String _searchQuery = '';
   bool _showSearchBar = false; // 🔍 สถานะแสดง/ซ่อนแถบค้นหา
+  int _messageCount = 0; // ⚡ ติดตามจำนวนข้อความเพื่อ rebuild
 
   @override
   void initState() {
@@ -38,15 +39,31 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
     
     // 🔥 Auto refresh ทุก 5 วินาที เพื่อดึงข้อความใหม่
     _startAutoRefresh();
+    
+    // ⚡ ฟังการเปลี่ยนแปลงของ friendChats เพื่อ rebuild
+    appState.addListener(_onMessagesChanged);
   }
 
   @override
   void dispose() {
+    appState.removeListener(_onMessagesChanged);
     _messageController.dispose();
     _scrollController.dispose();
     _searchController.dispose();
     _autoRefreshTimer?.cancel();
     super.dispose();
+  }
+
+  // ⚡ Callback เมื่อมีข้อความใหม่
+  void _onMessagesChanged() {
+    final messages = appState.friendChats[widget.friend.userId] ?? [];
+    final newCount = messages.length;
+    if (newCount != _messageCount) {
+      setState(() {
+        _messageCount = newCount;
+      });
+      _scrollToBottom();
+    }
   }
 
   Timer? _autoRefreshTimer;
@@ -553,6 +570,7 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
         }
 
         return ListView.builder(
+          key: ValueKey('messages_${_messageCount}_${messages.length}'),
           controller: _scrollController,
           padding: const EdgeInsets.all(16),
           itemCount: messages.length,

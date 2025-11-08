@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // เพิ่ม import สำหรับ Clipboard
 import 'package:geolocator/geolocator.dart'; // เพิ่ม import สำหรับ GPS
 import 'package:firebase_messaging/firebase_messaging.dart'; // เพิ่มสำหรับ FCM
@@ -318,7 +318,12 @@ class _RootNavState extends State<RootNav> {
     // ส่งข้อความ SOS ไปยังอุปกรณ์ใกล้เคียง
     await appState.send(message);
     
-    // 🚨 เปิดโหมด SOS และ Broadcast สถานะพร้อมพิกัด
+    // เปลี่ยนโหมดเป็น SOS อัตโนมัติทันที (ถ้ายังไม่ได้เปิด)
+    if (!appState.isSOSActive) {
+      await appState.toggleSOSMode();
+    }
+    
+    // เปิดโหมด SOS และ Broadcast สถานะพร้อมพิกัด
     await appState.broadcastSOSStatus(
       isActive: true,
       latitude: latitude != null ? double.parse(latitude) : null,
@@ -400,7 +405,7 @@ class _RootNavState extends State<RootNav> {
                 ),
               ],
             ),
-            height: 60,
+            height: 68, // เพิ่มจาก 60 เป็น 68
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: List.generate(_items.length, (i) {
@@ -410,8 +415,9 @@ class _RootNavState extends State<RootNav> {
                     i == _index + (i > 2 ? 1 : 0); // Adjust selection for SOS
 
                 if (item.isSOS) {
-                  // Special SOS button in the center with scale animation
+                  // Special SOS button in the center with scale animation - ใหญ่ขึ้น
                   return Expanded(
+                    flex: 2, // ทำให้ SOS ใหญ่กว่าปุ่มอื่น 2 เท่า
                     child: TweenAnimationBuilder<double>(
                       tween: Tween(begin: 1.0, end: 1.0),
                       duration: const Duration(milliseconds: 200),
@@ -419,7 +425,7 @@ class _RootNavState extends State<RootNav> {
                         return Transform.scale(
                           scale: scale,
                           child: InkWell(
-                            borderRadius: BorderRadius.circular(18),
+                            borderRadius: BorderRadius.circular(20),
                             onTap: () {
                               // Trigger haptic feedback
                               HapticFeedback.heavyImpact();
@@ -431,8 +437,8 @@ class _RootNavState extends State<RootNav> {
                             },
                             child: Container(
                               margin: const EdgeInsets.symmetric(
-                                vertical: 6,
-                                horizontal: 6,
+                                vertical: 4,
+                                horizontal: 8,
                               ),
                               decoration: BoxDecoration(
                                 gradient: const LinearGradient(
@@ -443,7 +449,7 @@ class _RootNavState extends State<RootNav> {
                                   begin: Alignment.topCenter,
                                   end: Alignment.bottomCenter,
                                 ),
-                                borderRadius: BorderRadius.circular(18),
+                                borderRadius: BorderRadius.circular(20),
                                 boxShadow: [
                                   BoxShadow(
                                     color: Colors.red.withOpacity(0.5),
@@ -459,14 +465,14 @@ class _RootNavState extends State<RootNav> {
                                   Icon(
                                     item.icon,
                                     color: Colors.white,
-                                    size: 24,
+                                    size: 32, // เพิ่มจาก 24 เป็น 32
                                   ),
-                                  const SizedBox(height: 2),
+                                  const SizedBox(height: 4),
                                   Text(
                                     item.label,
                                     style: const TextStyle(
                                       color: Colors.white,
-                                      fontSize: 11,
+                                      fontSize: 13, // เพิ่มจาก 11 เป็น 13
                                       fontWeight: FontWeight.bold,
                                       letterSpacing: 0.5,
                                     ),
@@ -481,8 +487,9 @@ class _RootNavState extends State<RootNav> {
                   );
                 }
 
-                // Regular navigation items - with smooth animation
+                // Regular navigation items - ลดขนาดลง
                 return Expanded(
+                  flex: 1, // ปุ่มปกติมี flex = 1
                   child: InkWell(
                     borderRadius: BorderRadius.circular(16),
                     onTap: () {
@@ -511,7 +518,7 @@ class _RootNavState extends State<RootNav> {
                               color: selected
                                   ? cs.primary
                                   : cs.onSurfaceVariant,
-                              size: selected ? 24 : 22,
+                              size: selected ? 22 : 20, // ลดจาก 24:22 เป็น 22:20
                             ),
                           ),
                           const SizedBox(height: 2),
@@ -521,7 +528,7 @@ class _RootNavState extends State<RootNav> {
                               color: selected
                                   ? cs.primary
                                   : cs.onSurfaceVariant,
-                              fontSize: selected ? 11 : 10,
+                              fontSize: selected ? 10 : 9, // ลดจาก 11:10 เป็น 10:9
                               fontWeight: selected
                                   ? FontWeight.bold
                                   : FontWeight.normal,
@@ -607,14 +614,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   Flexible(
                     child: Text(
                       p.name.isNotEmpty ? p.name : 'อุปกรณ์ไม่ระบุชื่อ',
-                      style: TextStyle(
+                      style: const TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.bold,
-                        color: isSOS
-                            ? Colors.red
-                            : isRescue
-                                ? Colors.blue
-                                : Colors.black,
+                        color: Colors.white, // เปลี่ยนเป็นสีขาว
                       ),
                     ),
                   ),
@@ -666,9 +669,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               ),
               Text(
                 'ID: ${p.id}',
-                style: TextStyle(
+                style: const TextStyle(
                   fontSize: 12,
-                  color: Colors.grey[600],
+                  color: Colors.white70, // เปลี่ยนเป็นสีขาวโปร่งแสง
                 ),
               ),
               // 📍 แสดงระยะห่าง (อัพเดททุก 5 วินาที)
@@ -813,17 +816,57 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             backgroundColor: cs.surface,
             elevation: 0,
             actions: [
-              // ปุ่มการแจ้งเตือน (ย้ายมาจากแท็บล่าง)
-              IconButton(
-                icon: const Icon(Icons.notifications),
-                onPressed: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (context) => const NotificationsScreen(),
-                    ),
+              // ปุ่มการแจ้งเตือน (ย้ายมาจากแท็บล่าง) พร้อม badge แสดงจำนวน
+              AnimatedBuilder(
+                animation: NotificationService(),
+                builder: (context, child) {
+                  final notificationCount = NotificationService().inAppNotifications.length;
+                  return Stack(
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.notifications),
+                        onPressed: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (context) => const NotificationsScreen(),
+                            ),
+                          );
+                        },
+                        tooltip: 'การแจ้งเตือน',
+                      ),
+                      // Badge แสดงจำนวนการแจ้งเตือน
+                      if (notificationCount > 0)
+                        Positioned(
+                          right: 8,
+                          top: 8,
+                          child: Container(
+                            padding: const EdgeInsets.all(4),
+                            decoration: BoxDecoration(
+                              color: Colors.red,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: Colors.white,
+                                width: 1.5,
+                              ),
+                            ),
+                            constraints: const BoxConstraints(
+                              minWidth: 18,
+                              minHeight: 18,
+                            ),
+                            child: Text(
+                              notificationCount > 9 ? '9+' : '$notificationCount',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        ),
+                    ],
                   );
                 },
-                tooltip: 'การแจ้งเตือน',
               ),
             ],
           ),
@@ -838,7 +881,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   ),
                   child: Column(
                     children: [
-                      const SizedBox(height: 60),
+                      const SizedBox(height: 16), // ลดจาก 60 เหลือ 16
 
                       // Discovered Devices (แสดงเป็น simple card) - ย้ายขึ้นมาบนสุด
                       if (peers.isNotEmpty) ...[
@@ -846,11 +889,22 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                           width: double.infinity,
                           padding: const EdgeInsets.all(16),
                           decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(16),
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [
+                                cs.surfaceContainer,
+                                cs.surfaceContainerHigh,
+                              ],
+                            ),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: cs.outline.withOpacity(0.3),
+                              width: 1,
+                            ),
                             boxShadow: [
                               BoxShadow(
-                                color: Colors.black.withOpacity(0.1),
+                                color: cs.shadow.withOpacity(0.1),
                                 blurRadius: 8,
                                 offset: const Offset(0, 4),
                               ),
