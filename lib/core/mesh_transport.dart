@@ -193,24 +193,16 @@ class MeshTransport implements Transport {
   // ========== Internal Methods ==========
 
   void _onDirectPeersChanged(List<Peer> peers) {
-    debugPrint('📡 [MESH] 🔔 _onDirectPeersChanged called with ${peers.length} peers');
-    debugPrint('📡 [MESH] My device name: $deviceName');
-    for (final peer in peers) {
-      debugPrint('📡 [MESH]   - Peer: ${peer.id} (${peer.name})');
-    }
-    
-    // NearbyTransport กรอง self ออกให้แล้ว ไม่ต้องกรองซ้ำ
-    debugPrint('📡 [MESH] Processing all ${peers.length} peers from NearbyTransport');
+    debugPrint('📡 [MESH] Peers updated: ${peers.length} direct peers');
     
     // อัปเดต routing table: direct peers มี next hop = ตัวมันเอง
     for (final peer in peers) {
       _routingTable[peer.id] = peer.id; // direct route
       _allPeers.add(peer.id);
       
-      // 🔧 บันทึกชื่อของ direct peer
+      // บันทึกชื่อของ direct peer - ใช้จาก Nearby ทันที
       if (peer.name.isNotEmpty) {
         _deviceNames[peer.id] = peer.name;
-        debugPrint('📝 [MESH] Saved direct peer name: ${peer.id.substring(0, 8)}... = ${peer.name}');
       }
     }
     
@@ -220,7 +212,7 @@ class MeshTransport implements Transport {
       !currentIds.contains(peerId) && peerId != deviceId
     );
     
-    debugPrint('📡 [MESH] Routing table now has ${_routingTable.length} entries');
+    debugPrint('📡 [MESH] Routes: ${_routingTable.length}, emitting peers...');
     _emitPeers();
   }
 
@@ -387,20 +379,34 @@ class MeshTransport implements Transport {
   }
 
   void _startRouteDiscovery() {
-    // ส่ง HELLO message เพื่อค้นหา routes พร้อมส่ง device name
-    _routeDiscoveryTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
-      // 🔧 ส่ง device name ไปด้วยใน HELLO message
+    // 🔧 ส่ง HELLO แค่ครั้งเดียวตอนเริ่ม (ไม่ส่งซ้ำ ๆ เพราะมี name จาก Nearby แล้ว)
+    Future.delayed(const Duration(seconds: 2), () async {
       final helloMessage = _MeshMessage(
         id: _generateMessageId(),
         from: deviceId,
         to: null, // broadcast
-        body: 'HELLO:$deviceName', // 🔧 เพิ่ม device name
+        body: 'HELLO:$deviceName',
         ttl: 3,
         hops: [],
       );
       
       await _broadcastMeshMessage(helloMessage);
-      debugPrint('📡 [MESH] Route discovery: sent HELLO with name=$deviceName');
+      debugPrint('📡 [MESH] Initial HELLO sent with name=$deviceName');
+    });
+    
+    // ✅ ส่ง HELLO ซ้ำทุก 2 นาที (แทนที่จะเป็น 30 วินาที) สำหรับ mesh hops
+    _routeDiscoveryTimer = Timer.periodic(const Duration(minutes: 2), (_) async {
+      final helloMessage = _MeshMessage(
+        id: _generateMessageId(),
+        from: deviceId,
+        to: null,
+        body: 'HELLO:$deviceName',
+        ttl: 3,
+        hops: [],
+      );
+      
+      await _broadcastMeshMessage(helloMessage);
+      debugPrint('📡 [MESH] Periodic HELLO refresh (2 min interval)');
     });
   }
 

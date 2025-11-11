@@ -97,20 +97,23 @@ class _FloatingNotificationOverlayState extends State<FloatingNotificationOverla
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      children: [
-        widget.child,
-        if (_currentNotification != null)
-          Positioned(
-            top: MediaQuery.of(context).padding.top + 8,
-            left: 8,
-            right: 8,
-            child: SlideTransition(
-              position: _slideAnimation!,
-              child: _buildFloatingNotification(context, _currentNotification!),
+    return Directionality(
+      textDirection: TextDirection.ltr,
+      child: Stack(
+        children: [
+          widget.child,
+          if (_currentNotification != null)
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 8,
+              left: 8,
+              right: 8,
+              child: SlideTransition(
+                position: _slideAnimation!,
+                child: _buildFloatingNotification(context, _currentNotification!),
+              ),
             ),
-          ),
-      ],
+        ],
+      ),
     );
   }
 
