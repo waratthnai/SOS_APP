@@ -67,12 +67,13 @@ class WifiDirectChannel(private val activity: Activity) {
                                     Log.d(TAG, "  📱 Found: ${peer.deviceName} (${peer.deviceAddress})")
                                 }
                                 
-                                // 🔧 AUTO-CONNECT: เชื่อมต่อกับ peer แรกที่พบ
-                                if (!isConnected && peers.isNotEmpty()) {
-                                    val firstPeer = peers[0]
-                                    Log.d(TAG, "🔄 Auto-connecting to ${firstPeer.deviceName}...")
-                                    connectToPeer(firstPeer) {
-                                        Log.d(TAG, "✅ Auto-connected to ${firstPeer.deviceName}")
+                                // 🔧 AUTO-CONNECT: เชื่อมต่อกับ peer ทุกตัวที่พบ (WiFi Direct รองรับ 1:many)
+                                if (!isConnected) {
+                                    peers.forEach { peer ->
+                                        Log.d(TAG, "🔄 Auto-connecting to ${peer.deviceName}...")
+                                        connectToPeer(peer) {
+                                            Log.d(TAG, "✅ Auto-connected to ${peer.deviceName}")
+                                        }
                                     }
                                 }
                             } else {
@@ -196,10 +197,34 @@ class WifiDirectChannel(private val activity: Activity) {
             return
         }
         
+        // 🔧 หยุด discovery เก่าก่อน (ป้องกัน busy)
+        wifiP2pManager?.stopPeerDiscovery(channel, object : WifiP2pManager.ActionListener {
+            override fun onSuccess() {
+                Log.d(TAG, "✅ Stopped previous discovery")
+                // เพิ่ม delay เป็น 1000ms (1 วินาที) เพื่อให้ระบบพักผ่อน
+                Handler(Looper.getMainLooper()).postDelayed({
+                    startNewDiscovery(result)
+                }, 1000)
+            }
+            
+            override fun onFailure(reasonCode: Int) {
+                Log.w(TAG, "⚠️ Failed to stop previous discovery (code: $reasonCode), trying to start anyway...")
+                // เพิ่ม delay เป็น 1500ms เมื่อ stop ล้มเหลว
+                Handler(Looper.getMainLooper()).postDelayed({
+                    startNewDiscovery(result)
+                }, 1500)
+            }
+        })
+    }
+    
+    private fun startNewDiscovery(result: MethodChannel.Result) {
         Log.d(TAG, "🔍 Starting peer discovery...")
+        Log.d(TAG, "📊 Current state: isConnected=$isConnected, peers.size=${peers.size}")
+        
         wifiP2pManager?.discoverPeers(channel, object : WifiP2pManager.ActionListener {
             override fun onSuccess() {
                 Log.d(TAG, "✅ Peer discovery initiated successfully")
+                Log.d(TAG, "⏳ Waiting for WIFI_P2P_PEERS_CHANGED_ACTION broadcast...")
                 result.success(true)
             }
 
@@ -211,7 +236,14 @@ class WifiDirectChannel(private val activity: Activity) {
                     else -> "Unknown error: $reasonCode"
                 }
                 Log.e(TAG, "❌ Peer discovery failed: $reason (code: $reasonCode)")
-                result.error("DISCOVERY_FAILED", reason, null)
+                
+                // 🔧 ถ้า busy ให้ return success (ไม่ throw error) เพื่อให้ retry ได้
+                if (reasonCode == WifiP2pManager.BUSY) {
+                    Log.w(TAG, "⏸️ System busy, will retry later")
+                    result.success(false) // ส่ง false แทน error
+                } else {
+                    result.error("DISCOVERY_FAILED", reason, null)
+                }
             }
         })
     }

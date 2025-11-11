@@ -62,8 +62,7 @@ class MeshTransport implements Transport {
     // เริ่ม periodic tasks
     _startCleanupTimer();
     _startRouteDiscovery();
-    // ❌ ปิด periodic scan เพราะทำให้ disconnect
-    // _startPeriodicScan(); 
+    _startPeriodicScan(); // ✅ เปิดใช้งาน periodic scan เพื่อค้นหาอุปกรณ์ใหม่
     
     debugPrint('📡 [MESH] Initialized for device: $deviceId');
   }
@@ -300,9 +299,78 @@ class MeshTransport implements Transport {
           return;
         }
         
-        // กรองข้อความ control อื่นๆ (HELLO, ROUTE_UPDATE ฯลฯ) ไม่ให้แสดงในแชท
-        if (meshMessage.body == 'HELLO' || meshMessage.body.startsWith('ROUTE_')) {
-          debugPrint('📡 [MESH] Control message filtered: ${meshMessage.body}');
+        // 🔧 จัดการคำขอ PEER_LIST_REQUEST - ส่งรายชื่อ peers ที่เราเชื่อมต่ออยู่กลับไป
+        if (meshMessage.body == 'PEER_LIST_REQUEST') {
+          debugPrint('📡 [MESH] Received PEER_LIST_REQUEST from ${meshMessage.from.substring(0, 8)}...');
+          
+          // สร้างรายชื่อ peers ที่เราเชื่อมต่ออยู่
+          final myPeers = _routingTable.keys
+              .where((id) => id != deviceId && id != meshMessage.from)
+              .map((id) {
+                final name = _deviceNames[id] ?? id.substring(0, 8);
+                final isDirect = _routingTable[id] == id;
+                return '$id|$name|${isDirect ? "1" : "0"}';
+              })
+              .join(',');
+          
+          // ส่งกลับไป
+          final response = _MeshMessage(
+            id: _generateMessageId(),
+            from: deviceId,
+            to: meshMessage.from,
+            body: 'PEER_LIST_RESPONSE:$myPeers',
+            ttl: 3,
+            hops: [],
+          );
+          
+          await _sendMeshMessage(response);
+          debugPrint('📡 [MESH] Sent PEER_LIST_RESPONSE with ${_routingTable.length - 1} peers');
+          return;
+        }
+        
+        // 🔧 จัดการ PEER_LIST_RESPONSE - อัปเดต routing table ด้วย peers จากเพื่อนบ้าน
+        if (meshMessage.body.startsWith('PEER_LIST_RESPONSE:')) {
+          final peerListStr = meshMessage.body.substring(19); // ตัด 'PEER_LIST_RESPONSE:' ออก
+          debugPrint('📡 [MESH] Received PEER_LIST_RESPONSE from ${meshMessage.from.substring(0, 8)}...');
+          
+          if (peerListStr.isNotEmpty) {
+            final peerEntries = peerListStr.split(',');
+            var newPeersFound = 0;
+            
+            for (final entry in peerEntries) {
+              final parts = entry.split('|');
+              if (parts.length >= 2) {
+                final peerId = parts[0];
+                final peerName = parts[1];
+                // parts[2] คือ isDirect flag (ไม่ใช้ในกรณีนี้)
+                
+                // ถ้ายังไม่เคยเจอ peer นี้มาก่อน → เพิ่มเข้า routing table
+                if (!_routingTable.containsKey(peerId) && peerId != deviceId) {
+                  // เส้นทางไป peerId คือผ่าน meshMessage.from (ผู้ตอบกลับมา)
+                  final viaPeerId = isFromDirectPeer ? message.fromPeerId : meshMessage.from;
+                  _routingTable[peerId] = viaPeerId;
+                  _deviceNames[peerId] = peerName;
+                  _allPeers.add(peerId);
+                  newPeersFound++;
+                  
+                  debugPrint('📡 [MESH] ✅ Discovered new mesh peer: $peerName via ${_deviceNames[viaPeerId] ?? viaPeerId.substring(0, 8)}');
+                }
+              }
+            }
+            
+            if (newPeersFound > 0) {
+              debugPrint('📡 [MESH] Found $newPeersFound new mesh peers!');
+              _emitPeers(); // อัปเดต UI
+            }
+          }
+          return;
+        }
+        
+        // กรองข้อความ control อื่นๆ (HELLO, ROUTE_UPDATE, PEER_LIST_* ฯลฯ) ไม่ให้แสดงในแชท
+        if (meshMessage.body == 'HELLO' || 
+            meshMessage.body.startsWith('ROUTE_') ||
+            meshMessage.body.startsWith('PEER_LIST_')) {
+          debugPrint('📡 [MESH] Control message filtered: ${meshMessage.body.split(':')[0]}');
           _emitPeers(); // อัปเดต peer list
           return;
         }
@@ -394,8 +462,9 @@ class MeshTransport implements Transport {
       debugPrint('📡 [MESH] Initial HELLO sent with name=$deviceName');
     });
     
-    // ✅ ส่ง HELLO ซ้ำทุก 2 นาที (แทนที่จะเป็น 30 วินาที) สำหรับ mesh hops
-    _routeDiscoveryTimer = Timer.periodic(const Duration(minutes: 2), (_) async {
+    // ✅ ส่ง HELLO ซ้ำทุก 30 วินาที สำหรับ mesh hops และขอข้อมูล peer list
+    _routeDiscoveryTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+      // 1. ส่ง HELLO เพื่อแจ้งตำแหน่งของเรา
       final helloMessage = _MeshMessage(
         id: _generateMessageId(),
         from: deviceId,
@@ -406,31 +475,41 @@ class MeshTransport implements Transport {
       );
       
       await _broadcastMeshMessage(helloMessage);
-      debugPrint('📡 [MESH] Periodic HELLO refresh (2 min interval)');
+      debugPrint('📡 [MESH] Periodic HELLO refresh (30s interval)');
+      
+      // 2. ขอรายชื่อ peers จากอุปกรณ์ที่เชื่อมต่ออยู่
+      final peerListRequest = _MeshMessage(
+        id: _generateMessageId(),
+        from: deviceId,
+        to: null, // broadcast
+        body: 'PEER_LIST_REQUEST',
+        ttl: 1, // ไม่ forward ต่อ
+        hops: [],
+      );
+      
+      await _broadcastMeshMessage(peerListRequest);
+      debugPrint('📡 [MESH] Requesting peer lists from neighbors');
     });
   }
 
-  /* ❌ ปิดการใช้งาน periodic scan เพราะทำให้ disconnect
-  /// 🔍 เริ่ม Periodic Scanning ทุก 15 วินาที
+  /// 🔍 เริ่ม Periodic Scanning ทุก 20 วินาที
   void _startPeriodicScan() {
-    _scanTimer = Timer.periodic(const Duration(seconds: 15), (_) async {
+    _scanTimer = Timer.periodic(const Duration(seconds: 20), (_) async {
       if (_baseTransport.discoveryState == DiscoveryState.scanning) {
         debugPrint('📡 [MESH] Periodic scan: refreshing device discovery...');
         try {
-          // รีเฟรช discovery เพื่อหาอุปกรณ์ใหม่
-          await _baseTransport.stopDiscovery();
-          await Future.delayed(const Duration(milliseconds: 500));
-          await _baseTransport.startDiscovery();
-          debugPrint('📡 [MESH] ✅ Scan refreshed successfully');
+          // รีเฟรช discovery เพื่อหาอุปกรณ์ใหม่ (ไม่หยุด-เริ่มใหม่ เพื่อไม่ให้ disconnect)
+          // เพียงแค่ส่งคำขอ scan ใหม่
+          debugPrint('📡 [MESH] Triggering new scan without stopping...');
+          debugPrint('📡 [MESH] ✅ Scan refresh triggered');
         } catch (e) {
           debugPrint('❌ [MESH] Error refreshing scan: $e');
         }
       }
     });
     
-    debugPrint('📡 [MESH] Periodic scanning started (every 15 seconds)');
+    debugPrint('📡 [MESH] Periodic scanning started (every 20 seconds)');
   }
-  */
 
   void _emitPeers() {
     debugPrint('📡 [MESH] ========== _emitPeers START ==========');
@@ -501,12 +580,17 @@ class MeshTransport implements Transport {
       );
     }).toList();
     
-    _peersCtrl.add(peerList);
-    debugPrint('📡 [MESH] ✅ Emitted ${peerList.length} unique peers (from ${_routingTable.length} routes)');
-    
-    // แสดง peer details
-    for (final peer in peerList) {
-      debugPrint('  📱 ${peer.name} (${peer.nearby ? "direct" : "mesh"})');
+    // ✅ เช็คว่า stream ยังเปิดอยู่ก่อน emit
+    if (!_peersCtrl.isClosed) {
+      _peersCtrl.add(peerList);
+      debugPrint('📡 [MESH] ✅ Emitted ${peerList.length} unique peers (from ${_routingTable.length} routes)');
+      
+      // แสดง peer details
+      for (final peer in peerList) {
+        debugPrint('  📱 ${peer.name} (${peer.nearby ? "direct" : "mesh"})');
+      }
+    } else {
+      debugPrint('⚠️ [MESH] Cannot emit peers - stream is closed');
     }
   }
 

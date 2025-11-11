@@ -23,7 +23,10 @@ class BleTransport implements Transport {
   Future<void> startDiscovery() async {
     _state = DiscoveryState.scanning;
     _devices.clear();
-    _peersCtrl.add([]);
+    // ✅ เช็คว่า stream ยังเปิดอยู่ก่อน emit
+    if (!_peersCtrl.isClosed) {
+      _peersCtrl.add([]);
+    }
     await FlutterBluePlus.startScan(timeout: const Duration(seconds: 5));
     _scanSub?.cancel();
     _scanSub = FlutterBluePlus.scanResults.listen((results) {
@@ -32,7 +35,10 @@ class BleTransport implements Transport {
         peers.add(Peer(id: r.device.id.id, name: r.device.name.isEmpty ? 'BLE Device' : r.device.name));
         if (!_devices.any((d) => d.id.id == r.device.id.id)) _devices.add(r.device);
       }
-      _peersCtrl.add(peers);
+      // ✅ เช็คว่า stream ยังเปิดอยู่ก่อน emit
+      if (!_peersCtrl.isClosed) {
+        _peersCtrl.add(peers);
+      }
     });
   }
 
@@ -41,7 +47,10 @@ class BleTransport implements Transport {
     _state = DiscoveryState.idle;
     await FlutterBluePlus.stopScan();
     await _scanSub?.cancel();
-    _peersCtrl.add([]);
+    // ✅ เช็คว่า stream ยังเปิดอยู่ก่อน emit
+    if (!_peersCtrl.isClosed) {
+      _peersCtrl.add([]);
+    }
   }
 
   @override

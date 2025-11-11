@@ -20,6 +20,12 @@ class WifiDirectTransport implements Transport {
   Timer? _discoveryTimer; // เพิ่ม timer สำหรับค้นหาซ้ำ
   Timer? _gpsTimer; // เพิ่ม timer สำหรับส่ง GPS
   
+  // 🔧 ป้องกัน "System busy"
+  bool _isDiscovering = false;
+  DateTime? _lastDiscoveryAttempt;
+  int _failedAttempts = 0;
+  static const _minDiscoveryInterval = Duration(seconds: 45); // เพิ่มจาก 15s → 45s เพื่อลด busy
+  
   WifiDirectTransport({String? deviceName}) 
       : deviceName = deviceName ?? 'WiFi Device';
 
@@ -52,11 +58,11 @@ class WifiDirectTransport implements Transport {
       // เริ่มค้นหาครั้งแรก
       await _triggerDiscovery();
       
-      // ตั้ง timer ให้ค้นหาซ้ำทุก 10 วินาที (เหมือน Bluetooth)
+      // ✅ ตั้ง timer ให้ค้นหาซ้ำทุก 30 วินาที (เพิ่มจาก 20 เพื่อให้เวลาเชื่อมต่อ)
       _discoveryTimer?.cancel();
-      _discoveryTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      _discoveryTimer = Timer.periodic(const Duration(seconds: 30), (_) {
         print('🔄 [WiFi Direct] Periodic discovery...');
-        _triggerDiscovery();
+        _triggerDiscovery(); // ฟังก์ชันนี้จะเช็คเงื่อนไขเองแล้ว
       });
       
       // 🔧 ส่ง device name broadcast ทันทีเมื่อเริ่ม scan
@@ -104,8 +110,11 @@ class WifiDirectTransport implements Transport {
               }
             }
             
-            _peersCtrl.add(List.from(_currentPeers));
-            print('📶 [WiFi Direct] Found ${_currentPeers.length} peers');
+            // ✅ เช็คว่า stream ยังเปิดอยู่ก่อน emit
+            if (!_peersCtrl.isClosed) {
+              _peersCtrl.add(List.from(_currentPeers));
+              print('📶 [WiFi Direct] Found ${_currentPeers.length} peers');
+            }
             
           } else if (type == 'message') {
             final fromPeerId = event['fromPeerId']?.toString() ?? 'unknown';
@@ -127,7 +136,10 @@ class WifiDirectTransport implements Transport {
                   name: deviceName,
                   nearby: true,
                 );
-                _peersCtrl.add(List.from(_currentPeers));
+                // ✅ เช็คว่า stream ยังเปิดอยู่ก่อน emit
+                if (!_peersCtrl.isClosed) {
+                  _peersCtrl.add(List.from(_currentPeers));
+                }
               }
               return; // ⚠️ DEVICE_NAME ไม่ส่งต่อไปยัง message stream
             }
@@ -156,12 +168,64 @@ class WifiDirectTransport implements Transport {
     }
   }
   
-  /// เรียก native discovery
+  /// เรียก native discovery พร้อมป้องกัน "System busy"
   Future<void> _triggerDiscovery() async {
+    // 🔒 ป้องกันการเรียกซ้อนทับกัน
+    if (_isDiscovering) {
+      print('⏭️ [WiFi Direct] Discovery already in progress, skipping...');
+      return;
+    }
+    
+    // ⏱️ ตรวจสอบช่วงเวลาจากครั้งล่าสุด
+    final now = DateTime.now();
+    if (_lastDiscoveryAttempt != null) {
+      final elapsed = now.difference(_lastDiscoveryAttempt!);
+      if (elapsed < _minDiscoveryInterval) {
+        final remaining = _minDiscoveryInterval.inSeconds - elapsed.inSeconds;
+        print('⏸️ [WiFi Direct] Too soon, waiting ${remaining}s before next discovery');
+        return;
+      }
+    }
+    
+    _isDiscovering = true;
+    _lastDiscoveryAttempt = now;
+    
     try {
-      await platform.invokeMethod('discoverPeers');
+      final result = await platform.invokeMethod('discoverPeers');
+      
+      // 🔧 ตรวจสอบผลลัพธ์จาก native
+      if (result == true) {
+        _failedAttempts = 0; // รีเซ็ตถ้าสำเร็จ
+        print('✅ [WiFi Direct] Discovery triggered successfully');
+      } else if (result == false) {
+        // System busy (ไม่ throw error แต่ return false)
+        _failedAttempts++;
+        print('⚠️ [WiFi Direct] System busy (attempt $_failedAttempts), will retry later...');
+        
+        // 🔧 เพิ่มระยะเวลารอตาม failed attempts (exponential backoff)
+        // เริ่มที่ 60s แทน 20s และเพิ่ม 20s แทน 10s
+        final waitTime = Duration(seconds: 60 + (_failedAttempts * 20));
+        _lastDiscoveryAttempt = now.add(waitTime);
+        
+        print('⏳ [WiFi Direct] Will retry after ${waitTime.inSeconds}s');
+      }
     } catch (e) {
-      print('⚠️ [WiFi Direct] Discovery trigger failed: $e');
+      _failedAttempts++;
+      
+      // 🔴 ถ้า error เป็น "System busy" → รอนานขึ้น
+      if (e.toString().contains('System busy') || e.toString().contains('BUSY')) {
+        print('⚠️ [WiFi Direct] System busy (attempt $_failedAttempts), will retry later...');
+        
+        // 🔧 เพิ่มระยะเวลารอตาม failed attempts (exponential backoff)
+        final waitTime = Duration(seconds: 60 + (_failedAttempts * 20));
+        _lastDiscoveryAttempt = now.add(waitTime);
+        
+        print('⏳ [WiFi Direct] Will retry after ${waitTime.inSeconds}s');
+      } else {
+        print('⚠️ [WiFi Direct] Discovery trigger failed: $e');
+      }
+    } finally {
+      _isDiscovering = false;
     }
   }
 
@@ -177,10 +241,19 @@ class WifiDirectTransport implements Transport {
       _gpsTimer?.cancel();
       _gpsTimer = null;
       
+      // 🔧 รีเซ็ต discovery state
+      _isDiscovering = false;
+      _lastDiscoveryAttempt = null;
+      _failedAttempts = 0;
+      
       await platform.invokeMethod('stopDiscovery');
       _eventSub?.cancel();
       _currentPeers.clear();
-      _peersCtrl.add([]);
+      
+      // ✅ เช็คว่า stream ยังเปิดอยู่ก่อน emit
+      if (!_peersCtrl.isClosed) {
+        _peersCtrl.add([]);
+      }
       
       print('✅ [WiFi Direct] Discovery stopped');
     } catch (e) {
@@ -191,6 +264,19 @@ class WifiDirectTransport implements Transport {
   @override
   Future<void> sendMessage(String body, {Peer? to}) async {
     try {
+      // 🔧 เช็คว่ามี peer หรือยัง
+      if (_currentPeers.isEmpty) {
+        print('⚠️ [WiFi Direct] No peers available, message queued');
+        // ส่ง echo กลับเพื่อไม่ให้ app หาย
+        _msgCtrl.add(Message(
+          fromPeerId: 'me',
+          toPeerId: to?.id,
+          body: body,
+          time: DateTime.now(),
+        ));
+        return; // ไม่ส่งจริงถ้าไม่มี peer
+      }
+      
       print('📶 [WiFi Direct] Sending message to ${to?.name ?? "all"}: ${body.length > 100 ? '${body.substring(0, 100)}...' : body}');
       
       await platform.invokeMethod('sendMessage', {

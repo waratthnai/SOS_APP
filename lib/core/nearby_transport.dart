@@ -192,7 +192,10 @@ class NearbyTransport implements Transport {
     }
     
     print('📱 Emitting ${list.length} connected peers');
-    _peersCtrl.add(list);
+    // ✅ เช็คว่า stream ยังเปิดอยู่ก่อน emit
+    if (!_peersCtrl.isClosed) {
+      _peersCtrl.add(list);
+    }
   }
 
   // Helper method สำหรับ request connection พร้อม retry logic

@@ -318,16 +318,16 @@ class _RootNavState extends State<RootNav> {
       message += '\n📍 ตำแหน่ง: $googleMapsUrl';
     }
 
-    // ส่งข้อความ SOS ไปยังอุปกรณ์ใกล้เคียง
-    await appState.send(message);
+    // ⚡ ส่งข้อความ SOS ไปยังอุปกรณ์ใกล้เคียง (ไม่ await เพื่อความเร็ว)
+    appState.send(message);
     
-    // เปลี่ยนโหมดเป็น SOS อัตโนมัติทันที (ถ้ายังไม่ได้เปิด)
+    // ⚡ เปลี่ยนโหมดเป็น SOS อัตโนมัติทันที (ถ้ายังไม่ได้เปิด) - ไม่ await
     if (!appState.isSOSActive) {
-      await appState.toggleSOSMode();
+      appState.toggleSOSMode();
     }
     
-    // เปิดโหมด SOS และ Broadcast สถานะพร้อมพิกัด
-    await appState.broadcastSOSStatus(
+    // ⚡ เปิดโหมด SOS และ Broadcast สถานะพร้อมพิกัด (ไม่ await)
+    appState.broadcastSOSStatus(
       isActive: true,
       latitude: latitude != null ? double.parse(latitude) : null,
       longitude: longitude != null ? double.parse(longitude) : null,
@@ -581,6 +581,76 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   void dispose() {
     _blinkController.dispose();
     super.dispose();
+  }
+
+  // 🔄 ฟังก์ชันสลับ Protocol
+  void _switchProtocol(BuildContext context, String protocol) {
+    // ป้องกันการ toggle protocol เดียวกันซ้ำ
+    if ((protocol == 'wifi' && appState.selectedProtocol == 'wifi_direct') ||
+        (protocol == 'bluetooth' && appState.selectedProtocol == 'nearby') ||
+        (protocol == 'radio' && appState.selectedProtocol == 'mesh')) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${protocol.toUpperCase()} protocol กำลังทำงานอยู่แล้ว'),
+          backgroundColor: Colors.blue,
+          duration: const Duration(seconds: 1),
+        ),
+      );
+      return;
+    }
+    
+    // แสดงชื่อที่อ่านง่าย
+    String displayName = protocol == 'wifi' ? 'WiFi Direct' 
+                       : protocol == 'bluetooth' ? 'Bluetooth'
+                       : 'Radio Mesh';
+    
+    // แสดงข้อความกำลังสลับทันที
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('🔄 กำลังสลับไปยัง $displayName...'),
+        backgroundColor: Colors.orange,
+        duration: const Duration(milliseconds: 800),
+      ),
+    );
+    
+    // กำหนด transport name
+    String transportName;
+    if (protocol == 'wifi') {
+      transportName = 'wifi_direct';
+    } else if (protocol == 'bluetooth') {
+      transportName = 'nearby';
+    } else if (protocol == 'radio') {
+      transportName = 'mesh';
+    } else {
+      transportName = protocol;
+    }
+    
+    // ทำงานใน background
+    appState.switchTransport(transportName).then((_) async {
+      // บันทึกค่า
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('active_protocol', protocol);
+      
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✅ สลับไปยัง $displayName สำเร็จ'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    }).catchError((e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ ไม่สามารถสลับโปรโตคอลได้: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    });
   }
 
   // Helper method สำหรับสร้าง content ของ peer card
@@ -1142,297 +1212,309 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                         const SizedBox(height: 24),
                       ],
 
-                      // 🚨 โหมดฉุกเฉิน SOS Card
-                      AnimatedBuilder(
-                        animation: appState,
-                        builder: (context, _) {
-                          final isSOSActive = appState.isSOSActive;
-                          return GestureDetector(
-                            onTap: () async {
-                              await appState.toggleSOSMode();
-                              if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      isSOSActive
-                                          ? '🚨 ปิดโหมด SOS แล้ว'
-                                          : '🚨 เปิดโหมด SOS - กำลังค้นหาอุปกรณ์ใกล้เคียง...',
-                                    ),
-                                    backgroundColor: isSOSActive
-                                        ? cs.surfaceContainerHighest
-                                        : Colors.red,
-                                    duration: const Duration(seconds: 2),
-                                  ),
-                                );
-                              }
-                            },
-                            child: Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.all(20),
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                  colors: isSOSActive
-                                      ? [
-                                          const Color(0xFFE53E3E),
-                                          const Color(0xFFFF0000),
-                                        ]
-                                      : [
-                                          cs.surfaceContainer,
-                                          cs.surfaceContainerHigh,
-                                        ],
-                                ),
-                                borderRadius: BorderRadius.circular(20),
-                                border: Border.all(
-                                  color: isSOSActive
-                                      ? Colors.red.shade700
-                                      : cs.outline.withOpacity(0.3),
-                                  width: isSOSActive ? 3 : 1,
-                                ),
-                                boxShadow: isSOSActive
-                                    ? [
-                                        BoxShadow(
-                                          color: Colors.red.withOpacity(0.5),
-                                          blurRadius: 20,
-                                          spreadRadius: 5,
+                      // 🚨 + 🚑 โหมด SOS และกู้ภัย - แนวนอน (ซ้ายขวา)
+                      Row(
+                        children: [
+                          // 🚨 โหมด SOS (ซ้าย)
+                          Expanded(
+                            child: AnimatedBuilder(
+                              animation: appState,
+                              builder: (context, _) {
+                                final isSOSActive = appState.isSOSActive;
+                                return GestureDetector(
+                                  onTap: () {
+                                    // ⚡ Real-time: อัปเดต UI ทันทีและทำงาน background
+                                    final willActivate = !isSOSActive;
+                                    
+                                    // แสดงข้อความทันที
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(
+                                          willActivate
+                                              ? '🚨 กำลังเปิดโหมด SOS...'
+                                              : '🚨 กำลังปิดโหมด SOS...',
                                         ),
-                                      ]
-                                    : [
-                                        BoxShadow(
-                                          color: cs.shadow.withOpacity(0.1),
-                                          blurRadius: 8,
-                                          offset: const Offset(0, 4),
-                                        ),
-                                      ],
-                              ),
-                              child: Row(
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.all(16),
-                                    decoration: BoxDecoration(
-                                      color: isSOSActive
-                                          ? Colors.white.withOpacity(0.2)
-                                          : cs.errorContainer,
-                                      borderRadius: BorderRadius.circular(16),
-                                    ),
-                                    child: Icon(
-                                      Icons.warning_amber_rounded,
-                                      size: 40,
-                                      color: isSOSActive
-                                          ? Colors.white
-                                          : cs.error,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 16),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          'โหมดฉุกเฉิน SOS',
-                                          style: theme.textTheme.titleLarge
-                                              ?.copyWith(
-                                                color: isSOSActive
-                                                    ? Colors.white
-                                                    : cs.onSurface,
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                        ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          isSOSActive
-                                              ? 'กำลังค้นหาและส่งสัญญาณ SOS...'
-                                              : 'เปิดเพื่อแจ้งสัญญาณฉุกเฉิน',
-                                          style: theme.textTheme.bodyMedium
-                                              ?.copyWith(
-                                                color: isSOSActive
-                                                    ? Colors.white.withOpacity(0.9)
-                                                    : cs.onSurfaceVariant,
-                                              ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  Switch(
-                                    value: isSOSActive,
-                                    onChanged: (value) async {
-                                      await appState.toggleSOSMode();
+                                        backgroundColor: willActivate
+                                            ? Colors.red
+                                            : cs.surfaceContainerHighest,
+                                        duration: const Duration(milliseconds: 800),
+                                      ),
+                                    );
+                                    
+                                    // ทำงานใน background
+                                    appState.toggleSOSMode().then((_) {
                                       if (context.mounted) {
-                                        ScaffoldMessenger.of(
-                                          context,
-                                        ).showSnackBar(
+                                        ScaffoldMessenger.of(context).showSnackBar(
                                           SnackBar(
                                             content: Text(
-                                              value
-                                                  ? '🚨 เปิดโหมด SOS - กำลังค้นหาอุปกรณ์ใกล้เคียง...'
-                                                  : '🚨 ปิดโหมด SOS แล้ว',
+                                              willActivate
+                                                  ? '✅ เปิด SOS'
+                                                  : '✅ ปิด SOS',
                                             ),
-                                            backgroundColor: value
-                                                ? Colors.red
-                                                : cs.surfaceContainerHighest,
-                                            duration: const Duration(
-                                              seconds: 2,
-                                            ),
+                                            backgroundColor: willActivate
+                                                ? Colors.red.shade700
+                                                : Colors.green,
+                                            duration: const Duration(seconds: 2),
                                           ),
                                         );
                                       }
-                                    },
-                                    activeColor: Colors.white,
-                                    activeTrackColor: Colors.red.shade700,
+                                    });
+                                  },
+                                  child: AspectRatio(
+                                    aspectRatio: 1, // จัตุรัส (1:1)
+                                    child: Container(
+                                      padding: const EdgeInsets.all(16),
+                                      decoration: BoxDecoration(
+                                        color: isSOSActive
+                                            ? const Color(0xFFFF0000) // สีแดงสดเมื่อเปิด
+                                            : cs.surfaceContainer, // สีพื้นฐานเมื่อปิด
+                                        borderRadius: BorderRadius.circular(16),
+                                        border: Border.all(
+                                          color: isSOSActive
+                                              ? Colors.red.shade700
+                                              : cs.outline.withOpacity(0.3),
+                                          width: 2,
+                                        ),
+                                        boxShadow: isSOSActive
+                                            ? [
+                                                BoxShadow(
+                                                  color: Colors.red.withOpacity(0.4),
+                                                  blurRadius: 12,
+                                                  spreadRadius: 2,
+                                                ),
+                                              ]
+                                            : null,
+                                      ),
+                                      child: Column(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          Icon(
+                                            Icons.warning_amber_rounded,
+                                            size: 56, // ไอคอนใหญ่ขึ้น
+                                            color: isSOSActive
+                                                ? Colors.white
+                                                : cs.error,
+                                          ),
+                                          const SizedBox(height: 12),
+                                          Text(
+                                            'SOS',
+                                            style: theme.textTheme.titleLarge?.copyWith(
+                                              color: isSOSActive
+                                                  ? Colors.white
+                                                  : cs.onSurface,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                            textAlign: TextAlign.center,
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            isSOSActive ? 'เปิดใช้งาน' : 'ฉุกเฉิน',
+                                            style: theme.textTheme.bodySmall?.copyWith(
+                                              color: isSOSActive
+                                                  ? Colors.white.withOpacity(0.9)
+                                                  : cs.onSurfaceVariant,
+                                            ),
+                                            textAlign: TextAlign.center,
+                                          ),
+                                        ],
+                                      ),
+                                    ),
                                   ),
-                                ],
-                              ),
+                                );
+                              },
                             ),
-                          );
-                        },
+                          ),
+
+                          const SizedBox(width: 12),
+
+                          // � โหมดกู้ภัย (ขวา)
+                          Expanded(
+                            child: AnimatedBuilder(
+                              animation: appState,
+                              builder: (context, _) {
+                                final isRescueMode = appState.isRescueMode;
+                                return GestureDetector(
+                                  onTap: () {
+                                    // ⚡ Real-time: อัปเดต UI ทันทีและทำงาน background
+                                    final willActivate = !isRescueMode;
+                                    
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(
+                                          willActivate
+                                              ? '🚑 กำลังเปิดโหมดหน่วยกู้ภัย...'
+                                              : '🚑 กำลังปิดโหมดหน่วยกู้ภัย...',
+                                        ),
+                                        backgroundColor: willActivate
+                                            ? Colors.blue
+                                            : cs.surfaceContainerHighest,
+                                        duration: const Duration(milliseconds: 800),
+                                      ),
+                                    );
+                                    
+                                    appState.toggleRescueMode().then((_) {
+                                      if (context.mounted) {
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(
+                                            content: Text(
+                                              willActivate
+                                                  ? '✅ เปิดโหมดหน่วยกู้ภัย'
+                                                  : '✅ ปิดโหมดหน่วยกู้ภัย',
+                                            ),
+                                            backgroundColor: willActivate
+                                                ? Colors.blue.shade700
+                                                : Colors.green,
+                                            duration: const Duration(seconds: 2),
+                                          ),
+                                        );
+                                      }
+                                    });
+                                  },
+                                  child: AspectRatio(
+                                    aspectRatio: 1, // จัตุรัส (1:1)
+                                    child: Container(
+                                      padding: const EdgeInsets.all(16),
+                                      decoration: BoxDecoration(
+                                        color: isRescueMode
+                                            ? Colors.blue.shade600 // สีน้ำเงินเมื่อเปิด
+                                            : cs.surfaceContainer, // สีพื้นฐานเมื่อปิด
+                                        borderRadius: BorderRadius.circular(16),
+                                        border: Border.all(
+                                          color: isRescueMode
+                                              ? Colors.blue.shade700
+                                              : cs.outline.withOpacity(0.3),
+                                          width: 2,
+                                        ),
+                                        boxShadow: isRescueMode
+                                            ? [
+                                                BoxShadow(
+                                                  color: Colors.blue.withOpacity(0.4),
+                                                  blurRadius: 12,
+                                                  spreadRadius: 2,
+                                                ),
+                                              ]
+                                            : null,
+                                      ),
+                                      child: Column(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          Icon(
+                                            Icons.local_hospital,
+                                            size: 56, // ไอคอนใหญ่ขึ้น
+                                            color: isRescueMode
+                                                ? Colors.white
+                                                : cs.tertiary,
+                                          ),
+                                          const SizedBox(height: 12),
+                                          Text(
+                                            'กู้ภัย',
+                                            style: theme.textTheme.titleLarge?.copyWith(
+                                              color: isRescueMode
+                                                  ? Colors.white
+                                                  : cs.onSurface,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                            textAlign: TextAlign.center,
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            isRescueMode ? 'เปิดใช้งาน' : 'ช่วยเหลือ',
+                                            style: theme.textTheme.bodySmall?.copyWith(
+                                              color: isRescueMode
+                                                  ? Colors.white.withOpacity(0.9)
+                                                  : cs.onSurfaceVariant,
+                                            ),
+                                            textAlign: TextAlign.center,
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                        ],
                       ),
 
                       const SizedBox(height: 16),
 
-                      // 🚑 โหมดหน่วยกู้ภัย Card
+                      // 📡 Protocol Selector - เล็กและกระชับ
                       AnimatedBuilder(
                         animation: appState,
                         builder: (context, _) {
-                          final isRescueMode = appState.isRescueMode;
-                          return GestureDetector(
-                            onTap: () async {
-                              await appState.toggleRescueMode();
-                              if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      isRescueMode
-                                          ? '🚑 ปิดโหมดหน่วยกู้ภัยแล้ว'
-                                          : '🚑 เปิดโหมดหน่วยกู้ภัย - กำลังค้นหาผู้ต้องการความช่วยเหลือ...',
-                                    ),
-                                    backgroundColor: isRescueMode
-                                        ? cs.surfaceContainerHighest
-                                        : Colors.blue,
-                                    duration: const Duration(seconds: 2),
-                                  ),
-                                );
-                              }
-                            },
-                            child: Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.all(20),
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                  colors: isRescueMode
-                                      ? [
-                                          Colors.blue.shade600,
-                                          Colors.blue.shade400,
-                                        ]
-                                      : [
-                                          cs.surfaceContainer,
-                                          cs.surfaceContainerHigh,
-                                        ],
-                                ),
-                                borderRadius: BorderRadius.circular(20),
-                                border: Border.all(
-                                  color: isRescueMode
-                                      ? Colors.blue.shade700
-                                      : cs.outline.withOpacity(0.3),
-                                  width: isRescueMode ? 3 : 1,
-                                ),
-                                boxShadow: isRescueMode
-                                    ? [
-                                        BoxShadow(
-                                          color: Colors.blue.withOpacity(0.5),
-                                          blurRadius: 20,
-                                          spreadRadius: 5,
-                                        ),
-                                      ]
-                                    : [
-                                        BoxShadow(
-                                          color: cs.shadow.withOpacity(0.1),
-                                          blurRadius: 8,
-                                          offset: const Offset(0, 4),
-                                          ),
-                                      ],
+                          // อ่านค่า protocol ปัจจุบัน
+                          final selected = appState.selectedProtocol;
+                          final protocols = {
+                            'wifi': selected == 'wifi' || selected == 'wifi_direct',
+                            'bluetooth': selected == 'bluetooth' || selected == 'nearby',
+                            'radio': selected == 'radio' || selected == 'mesh',
+                          };
+
+                          return Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: cs.surfaceContainerHighest,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: cs.outline.withOpacity(0.2),
                               ),
-                              child: Row(
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.all(16),
-                                    decoration: BoxDecoration(
-                                      color: isRescueMode
-                                          ? Colors.white.withOpacity(0.2)
-                                          : cs.tertiaryContainer,
-                                      borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Icon(
+                                      Icons.wifi_tethering,
+                                      color: cs.primary,
+                                      size: 20,
                                     ),
-                                    child: Icon(
-                                      Icons.local_hospital,
-                                      size: 40,
-                                      color: isRescueMode
-                                          ? Colors.white
-                                          : cs.tertiary,
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      'โปรโตคอลค้นหาอุปกรณ์',
+                                      style: theme.textTheme.titleMedium?.copyWith(
+                                        fontWeight: FontWeight.bold,
+                                      ),
                                     ),
-                                  ),
-                                  const SizedBox(width: 16),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          'โหมดหน่วยกู้ภัย',
-                                          style: theme.textTheme.titleLarge
-                                              ?.copyWith(
-                                                color: isRescueMode
-                                                    ? Colors.white
-                                                    : cs.onSurface,
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                        ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          isRescueMode
-                                              ? 'กำลังค้นหาผู้ต้องการความช่วยเหลือ...'
-                                              : 'เปิดเพื่อให้ความช่วยเหลือผู้อื่น',
-                                          style: theme.textTheme.bodyMedium
-                                              ?.copyWith(
-                                                color: isRescueMode
-                                                    ? Colors.white.withOpacity(0.9)
-                                                    : cs.onSurfaceVariant,
-                                              ),
-                                        ),
-                                      ],
+                                  ],
+                                ),
+                                const SizedBox(height: 12),
+                                // Protocol Cards แบบเล็ก
+                                Row(
+                                  children: [
+                                    // WiFi
+                                    Expanded(
+                                      child: _ProtocolCardSmall(
+                                        label: 'WiFi',
+                                        icon: Icons.wifi,
+                                        isSelected: protocols['wifi']!,
+                                        onTap: () => _switchProtocol(context, 'wifi'),
+                                      ),
                                     ),
-                                  ),
-                                  Switch(
-                                    value: isRescueMode,
-                                    onChanged: (value) async {
-                                      await appState.toggleRescueMode();
-                                      if (context.mounted) {
-                                        ScaffoldMessenger.of(
-                                          context,
-                                        ).showSnackBar(
-                                          SnackBar(
-                                            content: Text(
-                                              value
-                                                  ? '🚑 เปิดโหมดหน่วยกู้ภัย - กำลังค้นหาผู้ต้องการความช่วยเหลือ...'
-                                                  : '🚑 ปิดโหมดหน่วยกู้ภัยแล้ว',
-                                            ),
-                                            backgroundColor: value
-                                                ? Colors.blue
-                                                : cs.surfaceContainerHighest,
-                                            duration: const Duration(
-                                              seconds: 2,
-                                            ),
-                                          ),
-                                        );
-                                      }
-                                    },
-                                    activeColor: Colors.white,
-                                    activeTrackColor: Colors.blue.shade700,
-                                  ),
-                                ],
-                              ),
+                                    const SizedBox(width: 8),
+                                    // Bluetooth
+                                    Expanded(
+                                      child: _ProtocolCardSmall(
+                                        label: 'Bluetooth',
+                                        icon: Icons.bluetooth,
+                                        isSelected: protocols['bluetooth']!,
+                                        onTap: () => _switchProtocol(context, 'bluetooth'),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    // Mesh
+                                    Expanded(
+                                      child: _ProtocolCardSmall(
+                                        label: 'Mesh',
+                                        icon: Icons.radio,
+                                        isSelected: protocols['radio']!,
+                                        onTap: () => _switchProtocol(context, 'radio'),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
                             ),
                           );
                         },
@@ -1494,6 +1576,64 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           ),
         );
       },
+    );
+  }
+}
+
+// Protocol Card Small Widget (สำหรับหน้าหลัก)
+class _ProtocolCardSmall extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  const _ProtocolCardSmall({
+    required this.label,
+    required this.icon,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeInOutCubic,
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+        decoration: BoxDecoration(
+          color: isSelected ? cs.primaryContainer : cs.surfaceContainer,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isSelected ? cs.primary : cs.outline.withOpacity(0.2),
+            width: isSelected ? 2 : 1,
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 24,
+              color: isSelected ? cs.primary : cs.onSurfaceVariant,
+            ),
+            const SizedBox(height: 6),
+            Text(
+              label,
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: isSelected ? cs.primary : cs.onSurfaceVariant,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                fontSize: 11,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -1612,6 +1752,7 @@ class _NearbyShareScreenState extends State<NearbyShareScreen> {
     final cs = Theme.of(context).colorScheme;
     final peers = appState.peers;
     final msgs = appState.messages;
+    final currentProtocol = appState.selectedProtocol; // 🔧 เพิ่มตัวแปร
 
     return Scaffold(
       appBar: AppBar(
@@ -1622,24 +1763,53 @@ class _NearbyShareScreenState extends State<NearbyShareScreen> {
                 appState.transport.discoveryState == DiscoveryState.scanning
                 ? 'Stop Scan'
                 : 'Scan',
-            onPressed: () async {
-              if (appState.transport.discoveryState ==
-                  DiscoveryState.scanning) {
-                await appState.stopScan();
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Stopped scanning')),
-                  );
-                }
+            onPressed: () {
+              // ⚡ Real-time: แสดงผลทันทีและทำงาน background
+              final isScanning = appState.transport.discoveryState == DiscoveryState.scanning;
+              
+              if (isScanning) {
+                // แสดงผลทันที
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('⏸️ หยุดการสแกน...'),
+                    duration: Duration(milliseconds: 800),
+                  ),
+                );
+                setState(() {}); // refresh UI ทันที
+                
+                // ทำงานใน background
+                appState.stopScan().then((_) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('✅ หยุดการสแกนแล้ว'),
+                        duration: Duration(seconds: 1),
+                      ),
+                    );
+                  }
+                });
               } else {
-                await appState.startScan();
-                if (mounted) {
-                  ScaffoldMessenger.of(
-                    context,
-                  ).showSnackBar(const SnackBar(content: Text('Scanning…')));
-                }
+                // แสดงผลทันที
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('🔍 กำลังค้นหาอุปกรณ์...'),
+                    duration: Duration(milliseconds: 800),
+                  ),
+                );
+                setState(() {}); // refresh UI ทันที
+                
+                // ทำงานใน background
+                appState.startScan().then((_) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('✅ กำลังค้นหาอุปกรณ์รอบข้าง'),
+                        duration: Duration(seconds: 1),
+                      ),
+                    );
+                  }
+                });
               }
-              setState(() {}); // refresh icon tooltip
             },
             icon: Icon(
               appState.transport.discoveryState == DiscoveryState.scanning
@@ -1671,9 +1841,9 @@ class _NearbyShareScreenState extends State<NearbyShareScreen> {
                   child: OutlinedButton.icon(
                     onPressed: peers.isEmpty
                         ? null
-                        : () async {
+                        : () {
                             if (_msgCtrl.text.isNotEmpty) {
-                              await appState.send(_msgCtrl.text);
+                              appState.send(_msgCtrl.text); // ⚡ ไม่ await
                               _msgCtrl.clear();
                             }
                           },
@@ -1685,8 +1855,8 @@ class _NearbyShareScreenState extends State<NearbyShareScreen> {
                 Expanded(
                   child: FilledButton.icon(
                     onPressed: (_selected != null && _msgCtrl.text.isNotEmpty)
-                        ? () async {
-                            await appState.send(_msgCtrl.text, to: _selected);
+                        ? () {
+                            appState.send(_msgCtrl.text, to: _selected); // ⚡ ไม่ await
                             _msgCtrl.clear();
                           }
                         : null,
@@ -1714,8 +1884,17 @@ class _NearbyShareScreenState extends State<NearbyShareScreen> {
                   ? Card(
                       child: ListTile(
                         leading: Icon(Icons.info, color: cs.primary),
-                        title: const Text('No devices yet'),
-                        subtitle: const Text('Tap the sensor icon to Scan'),
+                        title: Text(
+                          // 🔧 แสดงสถานะเฉพาะสำหรับ WiFi Direct
+                          currentProtocol == 'wifi_direct'
+                              ? '⚠️ WiFi Direct ต้องมี 2 เครื่องเปิดพร้อมกัน'
+                              : 'No devices yet'
+                        ),
+                        subtitle: Text(
+                          currentProtocol == 'wifi_direct'
+                              ? 'เปิด WiFi Direct บนอุปกรณ์อีกเครื่อง แล้วกด Scan'
+                              : 'Tap the sensor icon to Scan'
+                        ),
                       ),
                     )
                   : ListView.separated(
@@ -1998,63 +2177,81 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  void toggleProtocol(String protocol) async {
+  void toggleProtocol(String protocol) {
     // ป้องกันการ toggle protocol เดียวกันซ้ำ
     if ((protocol == 'wifi' && appState.selectedProtocol == 'wifi_direct') ||
         (protocol == 'bluetooth' && appState.selectedProtocol == 'nearby') ||
         (protocol == 'radio' && appState.selectedProtocol == 'mesh')) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('${protocol.toUpperCase()} protocol is already active'),
+          content: Text('${protocol.toUpperCase()} protocol กำลังทำงานอยู่แล้ว'),
           backgroundColor: Colors.blue,
+          duration: const Duration(seconds: 1),
         ),
       );
       return;
     }
     
-    try {
-      // สลับ transport จริง
-      String transportName;
-      if (protocol == 'wifi') {
-        transportName = 'wifi_direct';
-      } else if (protocol == 'bluetooth') {
-        transportName = 'nearby';
-      } else if (protocol == 'radio') {
-        transportName = 'mesh';
-      } else {
-        transportName = protocol;
-      }
-      
-      await appState.switchTransport(transportName);
-      
-      // บันทึกค่า (appState.switchTransport จะบันทึกให้แล้ว แต่เก็บไว้เผื่อ backwards compatibility)
+    // ⚡ Real-time: แสดงผลทันทีและทำงาน background
+    String displayName = protocol == 'wifi' ? 'WiFi Direct' 
+                       : protocol == 'bluetooth' ? 'Bluetooth'
+                       : 'Radio Mesh';
+    
+    // แสดงข้อความกำลังสลับทันที
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('🔄 กำลังสลับไปยัง $displayName...'),
+        backgroundColor: Colors.orange,
+        duration: const Duration(milliseconds: 800),
+      ),
+    );
+    
+    // อัปเดต UI ทันที
+    setState(() {});
+    
+    // กำหนด transport name
+    String transportName;
+    if (protocol == 'wifi') {
+      transportName = 'wifi_direct';
+    } else if (protocol == 'bluetooth') {
+      transportName = 'nearby';
+    } else if (protocol == 'radio') {
+      transportName = 'mesh';
+    } else {
+      transportName = protocol;
+    }
+    
+    // ทำงานใน background
+    appState.switchTransport(transportName).then((_) async {
+      // บันทึกค่า
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('active_protocol', protocol);
       
       if (mounted) {
         // อัพเดท UI
-        setState(() {}); // จะทำให้ protocols getter ถูกเรียกใหม่
+        setState(() {});
         
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              '✅ Switched to ${protocol.toUpperCase()} protocol successfully',
+              '✅ สลับไปยัง $displayName สำเร็จ',
             ),
             backgroundColor: Colors.green,
+            duration: const Duration(seconds: 2),
           ),
         );
       }
-    } catch (e) {
+    }).catchError((e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('❌ Failed to switch protocol: $e'),
+            content: Text('❌ ไม่สามารถสลับโปรโตคอลได้: $e'),
             backgroundColor: Colors.red,
-            duration: const Duration(seconds: 4),
+            duration: const Duration(seconds: 3),
           ),
         );
       }
-    }
+    });
   }
 
   @override
@@ -2837,100 +3034,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ), // ปิด Container
                   ), // ปิด Card ของ Profile (if user != null)
-                // Protocols Card
-                Card(
-                  elevation: 2,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  color: const Color(0xFF1A237E), // Navy blue card background
-                  child: Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Icon(
-                              Icons.wifi_tethering,
-                              color: const Color(0xFF1565C0),
-                              size: 28,
-                            ), // Navy blue icon
-                            const SizedBox(width: 8),
-                            const Text(
-                              'Device Search Protocols',
-                              style: TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
-                              ),
-                            ), // White text
-                          ],
-                        ),
-                        const SizedBox(height: 20),
-                        // WiFi Direct
-                        _ProtocolSwitch(
-                          icon: Icons.wifi,
-                          title: 'WiFi Direct',
-                          subtitle: 'Peer-to-peer connection',
-                          value: protocols['wifi']!,
-                          onChanged: (_) => toggleProtocol('wifi'),
-                        ),
-                        const SizedBox(height: 12),
-                        // Bluetooth
-                        _ProtocolSwitch(
-                          icon: Icons.bluetooth,
-                          title: 'Bluetooth',
-                          subtitle: 'Short-range discovery',
-                          value: protocols['bluetooth']!,
-                          onChanged: (_) => toggleProtocol('bluetooth'),
-                        ),
-                        const SizedBox(height: 12),
-                        // Radio Mesh
-                        _ProtocolSwitch(
-                          icon: Icons.radio,
-                          title: 'Radio Mesh',
-                          subtitle: 'Long-range network',
-                          value: protocols['radio']!,
-                          onChanged: (_) => toggleProtocol('radio'),
-                        ),
-                        const SizedBox(height: 24),
-                        // Protocol Info
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: const Color(
-                              0xFF1565C0,
-                            ).withOpacity(0.08), // Navy blue background
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: const Color(0xFF1565C0).withOpacity(0.2),
-                            ), // Navy blue border
-                          ),
-                          child: Text(
-                            'Active Protocols: ' +
-                                (protocols.entries
-                                            .where((e) => e.value)
-                                            .map((e) => e.key.toUpperCase())
-                                            .join(', ') ==
-                                        ''
-                                    ? 'None'
-                                    : protocols.entries
-                                          .where((e) => e.value)
-                                          .map((e) => e.key.toUpperCase())
-                                          .join(', ')),
-                            style: const TextStyle(
-                              fontSize: 14,
-                              color: Colors.white70,
-                            ), // White text
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 40),
               ],
             ),
           ),
@@ -3001,58 +3104,6 @@ class _ThemePreviewCard extends StatelessWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _ProtocolSwitch extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final bool value;
-  final ValueChanged<bool> onChanged;
-  const _ProtocolSwitch({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.value,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-      decoration: BoxDecoration(
-        color: cs.secondaryContainer.withOpacity(0.5),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: cs.onSurfaceVariant, size: 28),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(fontWeight: FontWeight.w600),
-                ),
-                Text(
-                  subtitle,
-                  style: TextStyle(
-                    color: cs.onSurface.withOpacity(0.7),
-                    fontSize: 13,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Switch(value: value, onChanged: onChanged, activeColor: cs.primary),
-        ],
       ),
     );
   }
