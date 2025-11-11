@@ -291,8 +291,9 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
     final cs = Theme.of(context).colorScheme;
     
     // ตรวจสอบสถานะ SOS และ Rescue Mode ของ peer นี้
-    final isSOSActive = appState.isSOSPeer(widget.peer.id);
-    final isRescueActive = appState.isRescuePeer(widget.peer.id);
+    // 🔧 ใช้ peer.name แทน peer.id เพื่อรองรับ mesh (ที่มีหลาย ID แต่ name เดียว)
+    final isSOSActive = appState.isSOSPeer(widget.peer.name);
+    final isRescueActive = appState.isRescuePeer(widget.peer.name);
     
     return Scaffold(
       backgroundColor: cs.background,

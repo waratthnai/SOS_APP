@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter/material.dart'; // เพิ่มสำหรับ MaterialPageRoute
 import 'package:flutter/services.dart'; // เพิ่มสำหรับ HapticFeedback
 import 'package:geolocator/geolocator.dart';
+import 'package:shared_preferences/shared_preferences.dart'; // เพิ่มสำหรับบันทึกค่า
 import 'transport.dart';
 import 'chat_models.dart';
 import '../cloud/firebase_service.dart';
@@ -12,7 +13,7 @@ import 'nearby_transport.dart';
 import 'device_id_manager.dart'; // เพิ่มสำหรับ Device ID
 // import 'mock_transport.dart';
 import 'wifi_direct_transport.dart';
-import 'ble_transport.dart';
+import 'mesh_transport.dart'; // เพิ่ม Mesh Transport
 import 'chat_db.dart';
 import 'notification_service.dart';
 import 'friend_service.dart';
@@ -105,12 +106,32 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     _loadLocalMessages();
     // Initialize friend service
     _initFriendService();
+    // โหลด protocol ที่เลือกไว้จาก SharedPreferences
+    _loadSelectedProtocol();
     // เริ่มฟัง App Lifecycle
     WidgetsBinding.instance.addObserver(this);
     // 🔄 เริ่ม Passive Listening อัตโนมัติ (หลังจากรอให้ app พร้อม)
     Future.delayed(const Duration(milliseconds: 500), () {
       _startPassiveListening();
     });
+  }
+  
+  /// 🔄 โหลด protocol ที่เลือกไว้จาก SharedPreferences
+  Future<void> _loadSelectedProtocol() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedProtocol = prefs.getString('selected_protocol');
+      
+      if (savedProtocol != null && savedProtocol.isNotEmpty) {
+        selectedProtocol = savedProtocol;
+        debugPrint('📡 Loaded saved protocol: $selectedProtocol');
+        notifyListeners(); // อัพเดท UI
+      } else {
+        debugPrint('📡 No saved protocol, using default: $selectedProtocol');
+      }
+    } catch (e) {
+      debugPrint('❌ Error loading saved protocol: $e');
+    }
   }
   
   /// 📡 เริ่ม Passive Listening - รับสัญญาณได้โดยไม่ต้องเปิดโหมดใดๆ
@@ -380,6 +401,69 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  // 🔄 สลับ Transport Protocol
+  Future<void> switchTransport(String protocol) async {
+    if (selectedProtocol == protocol) {
+      debugPrint('⏭️ Already using $protocol protocol');
+      return;
+    }
+
+    try {
+      debugPrint('🔄 Switching transport from $selectedProtocol to $protocol...');
+      
+      // หยุด transport เก่า
+      final wasScanning = transport.discoveryState == DiscoveryState.scanning;
+      if (wasScanning) {
+        await transport.stopDiscovery();
+      }
+      await transport.dispose();
+      
+      // สร้าง transport ใหม่
+      switch (protocol) {
+        case 'nearby':
+        case 'bluetooth':
+          transport = NearbyTransport(deviceName: _deviceName);
+          break;
+        case 'wifi':
+        case 'wifi_direct':
+          transport = WifiDirectTransport(deviceName: _deviceName); // 🔧 ส่ง deviceName
+          break;
+        case 'radio':
+        case 'mesh':
+          // 📡 Radio Mesh Transport - Multi-Hop Routing
+          final deviceId = await DeviceIdManager.getCurrentId();
+          transport = MeshTransport(
+            deviceId: deviceId,
+            deviceName: _deviceName,
+          );
+          debugPrint('📡 Created MeshTransport with deviceId: $deviceId');
+          break;
+        default:
+          throw ArgumentError('Unknown protocol: $protocol');
+      }
+      
+      selectedProtocol = protocol;
+      
+      // ตั้งค่า listeners ใหม่
+      _subs();
+      
+      // เริ่ม scan ใหม่ถ้าเดิมกำลัง scan อยู่
+      if (wasScanning) {
+        await startScan();
+      }
+      
+      // บันทึกค่า
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('selected_protocol', protocol);
+      
+      notifyListeners();
+      debugPrint('✅ Switched to $protocol successfully');
+    } catch (e) {
+      debugPrint('❌ Failed to switch transport: $e');
+      rethrow;
+    }
+  }
+
   Future<void> _initFriendService() async {
     await friendService.init();
     
@@ -419,26 +503,6 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       
       debugPrint('[AppState] ✅ Login sequence completed');
     }
-  }
-
-  Future<void> switchTransport(String protocol) async {
-    await transport.dispose();
-    switch (protocol) {
-      case 'nearby':
-        transport = NearbyTransport(deviceName: _deviceName);
-        break;
-      case 'wifi':
-        transport = WifiDirectTransport();
-        break;
-      case 'ble':
-        transport = BleTransport();
-        break;
-      default:
-        transport = NearbyTransport(deviceName: _deviceName);
-    }
-    selectedProtocol = protocol;
-    _subs();
-    notifyListeners();
   }
 
   // ====== Nearby ======
@@ -525,7 +589,14 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         return; // ❗ สำคัญ: return ทันทีเพื่อไม่ให้ไปบันทึกใน ChatMessage
       }
       
-      // 🚑 ตรวจสอบสถานะหน่วยกู้ภัย
+      // � ตรวจสอบข้อความ DEVICE_NAME (สำหรับ WiFi Direct/Mesh)
+      if (m.body.startsWith('DEVICE_NAME:')) {
+        debugPrint('📝 Received DEVICE_NAME from ${m.fromPeerId}');
+        // WiFi Direct จัดการเองแล้ว ไม่ต้องทำอะไร
+        return;
+      }
+      
+      // �🚑 ตรวจสอบสถานะหน่วยกู้ภัย
       if (m.body.startsWith('RESCUE_STATUS:')) {
         debugPrint('🔍 [DEBUG] ✅ พบข้อความ RESCUE_STATUS! กำลังเรียก _handleRescueStatus()');
         _handleRescueStatus(m.body, m.fromPeerId);
@@ -597,16 +668,29 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         // เก็บ local (ถ้า login แล้วก็เก็บด้วย userId, ถ้าไม่ก็เก็บด้วย anonymous)
         ChatDB.insertMessage(msg, currentUserId, receiver: myDeviceId);
         
-        // แจ้งเตือนเมื่อรับข้อความใหม่ (ใช้ชื่อจริงของ peer)
+        // 📱 แจ้งเตือนเมื่อรับข้อความใหม่
+        final senderName = peer.name.isNotEmpty ? peer.name : 'อุปกรณ์ใกล้เคียง';
+        
+        // 1. In-app notification (popup ในแอพ)
         NotificationService().showMessageNotification(
-          peer.name.isNotEmpty ? peer.name : 'อุปกรณ์ใกล้เคียง',
+          senderName,
           m.body,
-          senderId: m.fromPeerId, // ส่ง Peer ID เพื่อเปิดแชทได้
+          senderId: m.fromPeerId,
           onReply: () {
-            // เปิดหน้าแชทเมื่อกดปุ่มตอบกลับ
             _openChatScreen(peer);
           },
         );
+        
+        // 2. System notification (เด้งเข้าโทรศัพท์ - ทำงานแม้จอดับ)
+        try {
+          await _backgroundService.showMessageNotification(
+            senderName: senderName,
+            message: m.body,
+          );
+          debugPrint('📱 ส่ง system notification แล้ว');
+        } catch (e) {
+          debugPrint('⚠️ ส่ง system notification ล้มเหลว: $e');
+        }
         
         debugPrint('✅ เพิ่มข้อความใน chatMessages แล้ว (รวม ${_chatMessages.length} ข้อความ)');
         notifyListeners();
@@ -1309,9 +1393,9 @@ void addChatVideo(String path, {String? receiverId}) async {
       debugPrint('🔍 [DEBUG] isRescue = $isRescue');
       debugPrint('🔍 [DEBUG] _isSOSActive = $_isSOSActive');
       
-      // อัพเดท peer metadata (จะใช้ใน UI แสดง badge)
-      // เก็บสถานะใน map เพื่อให้ UI access ได้
-      _rescuePeers[fromPeerId] = isRescue;
+      // 🔧 ใช้ device name เป็น key แทน fromPeerId (เพื่อรองรับ mesh ที่มีหลาย ID)
+      _rescuePeers[deviceName] = isRescue;
+      debugPrint('💾 [MESH] Saved rescue status for device name: $deviceName = $isRescue');
       
       // 🚨 ถ้าเราเปิดโหมด SOS อยู่ และพบหน่วยกู้ภัย -> แจ้งเตือนพิเศษ!
       if (isRescue && _isSOSActive) {
@@ -1392,12 +1476,13 @@ void addChatVideo(String path, {String? receiverId}) async {
         debugPrint('⏰ SOS Timestamp: $sosTimestamp');
       }
       
-      // อัพเดท peer metadata
+      // 🔧 ใช้ device name เป็น key แทน fromPeerId (เพื่อรองรับ mesh ที่มีหลาย ID)
       if (isSOSMode) {
         // เข้าโหมด SOS - แสดงสีแดงแต่ไม่กระพริบ
-        _sosModePeers[fromPeerId] = true;
-        _sosPeers.remove(fromPeerId); // ❌ ลบออกเพราะยังไม่มี timestamp (ไม่ได้กดปุ่ม)
+        _sosModePeers[deviceName] = true;
+        _sosPeers.remove(deviceName); // ❌ ลบออกเพราะยังไม่มี timestamp (ไม่ได้กดปุ่ม)
         debugPrint('🚨 $deviceName เข้าโหมด SOS (ยังไม่ขอความช่วยเหลือ)');
+        debugPrint('💾 [MESH] Saved SOS mode for device name: $deviceName = true');
         
         // 🔔 แจ้งเตือนเมื่อพบอุปกรณ์เข้าโหมด SOS (แต่ยังไม่ขอความช่วยเหลือ)
         String locationInfo = '';
@@ -1420,9 +1505,10 @@ void addChatVideo(String path, {String? receiverId}) async {
         );
       } else if (isSOSActive) {
         // กดปุ่ม SOS - แสดงสีแดง + กระพริบ + เวลา
-        _sosModePeers[fromPeerId] = true;
-        _sosPeers[fromPeerId] = sosTimestamp ?? DateTime.now();
+        _sosModePeers[deviceName] = true;
+        _sosPeers[deviceName] = sosTimestamp ?? DateTime.now();
         debugPrint('🚨 $deviceName กดปุ่ม SOS - ขอความช่วยเหลือ!');
+        debugPrint('💾 [MESH] Saved SOS active for device name: $deviceName with timestamp');
         
         // แจ้งเตือนเฉพาะตอนกดปุ่ม SOS
         String locationInfo = '';
@@ -1446,9 +1532,10 @@ void addChatVideo(String path, {String? receiverId}) async {
         );
       } else {
         // ปิด SOS
-        _sosModePeers.remove(fromPeerId);
-        _sosPeers.remove(fromPeerId);
+        _sosModePeers.remove(deviceName);
+        _sosPeers.remove(deviceName);
         debugPrint('🚨 $deviceName ปิดโหมด SOS');
+        debugPrint('💾 [MESH] Removed SOS status for device name: $deviceName');
       }
       
       notifyListeners();
@@ -1472,20 +1559,30 @@ void addChatVideo(String path, {String? receiverId}) async {
   // 📊 Network Topology: เก็บข้อมูลเครือข่าย
   final Map<String, Set<String>> _networkTopology = {}; // peerId -> connected peers
   
-  // Getters สำหรับ UI
-  bool isRescuePeer(String peerId) => _rescuePeers[peerId] ?? false;
-  bool isSOSModePeer(String peerId) => _sosModePeers[peerId] ?? false; // อยู่ในโหมด SOS
-  bool isSOSPeer(String peerId) {
+  // 🔧 Getters สำหรับ UI - รับ peer name แทน peer ID (เพื่อรองรับ mesh)
+  bool isRescuePeer(String peerNameOrId) {
+    // ลองหาทั้ง name และ ID
+    return _rescuePeers[peerNameOrId] ?? false;
+  }
+  
+  bool isSOSModePeer(String peerNameOrId) {
+    // ลองหาทั้ง name และ ID
+    return _sosModePeers[peerNameOrId] ?? false;
+  }
+  
+  bool isSOSPeer(String peerNameOrId) {
     // ต้องเช็คว่ามี key และ value ไม่เป็น null (กดปุ่ม SOS แล้ว)
-    final timestamp = _sosPeers[peerId];
+    final timestamp = _sosPeers[peerNameOrId];
     return timestamp != null; // return true เฉพาะตอนมี timestamp จริงๆ
   }
-  DateTime? getSOSTimestamp(String peerId) => _sosPeers[peerId]; // ดึงเวลาที่กด SOS
+  
+  DateTime? getSOSTimestamp(String peerNameOrId) => _sosPeers[peerNameOrId]; // ดึงเวลาที่กด SOS
+  
   Map<String, bool> get rescuePeers => Map.unmodifiable(_rescuePeers);
   
   // เช็คว่า peer เป็นหน่วยกู้ภัยหรือไม่
-  bool isPeerRescue(String peerId) {
-    return _rescuePeers[peerId] ?? false;
+  bool isPeerRescue(String peerNameOrId) {
+    return _rescuePeers[peerNameOrId] ?? false;
   }
 
   /// รีเซ็ตจำนวนข้อความที่ยังไม่อ่านของเพื่อน
@@ -2232,13 +2329,17 @@ void addChatVideo(String path, {String? receiverId}) async {
     double? latitude,
     double? longitude,
   }) async {
-    if (_isBackgroundServiceEnabled) {
+    // ส่ง system notification เสมอ (ไม่ว่า background service เปิดหรือไม่)
+    try {
       await _backgroundService.showSOSNotification(
         senderName: senderName,
         message: message,
         latitude: latitude,
         longitude: longitude,
       );
+      debugPrint('📱 ส่ง SOS system notification แล้ว');
+    } catch (e) {
+      debugPrint('⚠️ ส่ง SOS system notification ล้มเหลว: $e');
     }
   }
 
@@ -2248,13 +2349,17 @@ void addChatVideo(String path, {String? receiverId}) async {
     double? latitude,
     double? longitude,
   }) async {
-    if (_isBackgroundServiceEnabled) {
+    // ส่ง system notification เสมอ (ไม่ว่า background service เปิดหรือไม่)
+    try {
       await _backgroundService.showSOSNotification(
         senderName: senderName,
         message: 'อยู่ในโหมดฉุกเฉิน - อาจต้องการความช่วยเหลือ',
         latitude: latitude,
         longitude: longitude,
       );
+      debugPrint('📱 ส่ง SOS Mode system notification แล้ว');
+    } catch (e) {
+      debugPrint('⚠️ ส่ง SOS Mode system notification ล้มเหลว: $e');
     }
   }
 

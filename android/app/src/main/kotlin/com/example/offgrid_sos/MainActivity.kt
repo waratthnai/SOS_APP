@@ -68,6 +68,15 @@ class MainActivity: FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler {
             call, result ->
             when (call.method) {
+                "setDeviceName" -> {
+                    val name = call.argument<String>("name")
+                    if (name != null) {
+                        wifiDirectChannel.setDeviceName(name)
+                        result.success(true)
+                    } else {
+                        result.error("INVALID_ARGUMENT", "Device name is required", null)
+                    }
+                }
                 "discoverPeers" -> wifiDirectChannel.discoverPeers(call, result)
                 "sendMessage" -> wifiDirectChannel.sendMessage(call, result)
                 "stopDiscovery" -> wifiDirectChannel.stopDiscovery(call, result)

@@ -163,6 +163,45 @@ class BackgroundService {
     );
   }
 
+  /// Show chat message notification (ทำงานแม้ไม่เปิด background service)
+  Future<void> showMessageNotification({
+    required String senderName,
+    required String message,
+  }) async {
+    // Initialize ถ้ายังไม่ได้ init
+    if (!_isInitialized) {
+      await initialize();
+    }
+
+    const androidDetails = AndroidNotificationDetails(
+      'chat_messages',
+      'Chat Messages',
+      channelDescription: 'Notifications for new chat messages',
+      importance: Importance.high,
+      priority: Priority.high,
+      showWhen: true,
+      enableVibration: true,
+      playSound: true,
+      largeIcon: DrawableResourceAndroidBitmap('@mipmap/ic_launcher'),
+    );
+
+    const iosDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+    );
+
+    await _notificationsPlugin.show(
+      DateTime.now().millisecondsSinceEpoch.remainder(100000),
+      '💬 ข้อความใหม่จาก $senderName',
+      message,
+      const NotificationDetails(
+        android: androidDetails,
+        iOS: iosDetails,
+      ),
+    );
+  }
+
   /// Update foreground notification
   Future<void> updateNotification({
     required String title,

@@ -286,8 +286,9 @@ class _FriendTile extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     
     // ตรวจสอบสถานะ SOS/Rescue (ใช้ friend.id เป็น peer ID)
-    final isSOSActive = appState.isSOSPeer(friend.id);
-    final isRescueActive = appState.isRescuePeer(friend.id);
+    // 🔧 ใช้ friend.name แทน friend.id เพื่อรองรับ mesh (ที่มีหลาย ID แต่ name เดียว)
+    final isSOSActive = appState.isSOSPeer(friend.name);
+    final isRescueActive = appState.isRescuePeer(friend.name);
     
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 4),

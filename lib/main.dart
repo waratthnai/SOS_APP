@@ -17,6 +17,7 @@ import 'ui/emergency_chat_screen.dart';
 import 'ui/device_name_setup_screen.dart';
 import 'ui/debug_screen.dart'; // เพิ่ม import หน้า Debug
 import 'ui/chat_history_screen.dart'; // เพิ่มสำหรับหน้าประวัติแชท
+import 'widgets/floating_notification.dart'; // เพิ่ม floating notification
 import 'package:shared_preferences/shared_preferences.dart';
 
 bool dummySwitch1 = false;
@@ -117,23 +118,25 @@ class _OffGridAppState extends State<OffGridApp> {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      navigatorKey: navigatorKey, // เพิ่ม global navigator key
-      title: 'Off-Grid SOS',
-      debugShowCheckedModeBanner: false,
-      theme: AppTheme.lightTheme,
-      darkTheme: AppTheme.darkTheme,
-      themeMode: _themeMode,
-      // เพิ่ม smooth theme transition
-      themeAnimationDuration: const Duration(milliseconds: 500),
-      themeAnimationCurve: Curves.easeInOutCubic,
-      routes: {'/home': (context) => const RootNav()},
-      home: widget.hasDeviceName
-          ? AnimatedBuilder(
-              animation: appState,
-              builder: (context, _) => const RootNav(),
-            )
-          : const DeviceNameSetupScreen(),
+    return FloatingNotificationOverlay(
+      child: MaterialApp(
+        navigatorKey: navigatorKey, // เพิ่ม global navigator key
+        title: 'Off-Grid SOS',
+        debugShowCheckedModeBanner: false,
+        theme: AppTheme.lightTheme,
+        darkTheme: AppTheme.darkTheme,
+        themeMode: _themeMode,
+        // เพิ่ม smooth theme transition
+        themeAnimationDuration: const Duration(milliseconds: 500),
+        themeAnimationCurve: Curves.easeInOutCubic,
+        routes: {'/home': (context) => const RootNav()},
+        home: widget.hasDeviceName
+            ? AnimatedBuilder(
+                animation: appState,
+                builder: (context, _) => const RootNav(),
+              )
+            : const DeviceNameSetupScreen(),
+      ),
     );
   }
 }
@@ -621,7 +624,29 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                       ),
                     ),
                   ),
-                  // 🚨 Badge SOS สีแดง
+                  // � Badge Mesh Connection (ถ้าไม่ใช่ direct)
+                  if (!p.nearby && appState.selectedProtocol == 'mesh') ...[
+                    const SizedBox(width: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.purple.shade700,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Text(
+                        '📡 mesh',
+                        style: TextStyle(
+                          fontSize: 9,
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                  // �🚨 Badge SOS สีแดง
                   if (isSOS) ...[
                     const SizedBox(width: 4),
                     Container(
@@ -967,7 +992,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                     const SizedBox(width: 4),
                                   ],
                                   // ⚠️ จำนวนโหมด SOS (ยังไม่กดปุ่ม)
-                                  if (peers.where((p) => appState.isSOSModePeer(p.id) && !appState.isSOSPeer(p.id)).isNotEmpty) ...[
+                                  // 🔧 ใช้ p.name แทน p.id เพื่อรองรับ mesh
+                                  if (peers.where((p) => appState.isSOSModePeer(p.name) && !appState.isSOSPeer(p.name)).isNotEmpty) ...[
                                     Container(
                                       padding: const EdgeInsets.symmetric(
                                         horizontal: 6,
@@ -991,7 +1017,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                           ),
                                           const SizedBox(width: 3),
                                           Text(
-                                            '${peers.where((p) => appState.isSOSModePeer(p.id) && !appState.isSOSPeer(p.id)).length}',
+                                            '${peers.where((p) => appState.isSOSModePeer(p.name) && !appState.isSOSPeer(p.name)).length}',
                                             style: const TextStyle(
                                               fontSize: 11,
                                               fontWeight: FontWeight.bold,
@@ -1004,7 +1030,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                     const SizedBox(width: 4),
                                   ],
                                   // 🚨 จำนวนผู้ขอความช่วยเหลือด่วน (กดปุ่ม SOS)
-                                  if (peers.where((p) => appState.isSOSPeer(p.id)).isNotEmpty) ...[
+                                  // 🔧 ใช้ p.name แทน p.id เพื่อรองรับ mesh
+                                  if (peers.where((p) => appState.isSOSPeer(p.name)).isNotEmpty) ...[
                                     Container(
                                       padding: const EdgeInsets.symmetric(
                                         horizontal: 6,
@@ -1028,7 +1055,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                           ),
                                           const SizedBox(width: 3),
                                           Text(
-                                            '${peers.where((p) => appState.isSOSPeer(p.id)).length}',
+                                            '${peers.where((p) => appState.isSOSPeer(p.name)).length}',
                                             style: const TextStyle(
                                               fontSize: 11,
                                               fontWeight: FontWeight.bold,
@@ -1043,12 +1070,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                               ),
                               const SizedBox(height: 12),
                               ...peers.take(3).map((p) {
-                                // 🚑 เช็คว่าเป็นหน่วยกู้ภัยหรือไม่
-                                final isRescue = appState.isPeerRescue(p.id);
+                                // � ใช้ p.name แทน p.id เพื่อรองรับ mesh
+                                // �🚑 เช็คว่าเป็นหน่วยกู้ภัยหรือไม่
+                                final isRescue = appState.isPeerRescue(p.name);
                                 // 🚨 เช็คว่าอยู่ในโหมด SOS หรือไม่
-                                final isSOSMode = appState.isSOSModePeer(p.id);
+                                final isSOSMode = appState.isSOSModePeer(p.name);
                                 // 🚨 เช็คว่ากดปุ่ม SOS (ขอความช่วยเหลือด่วน) หรือไม่
-                                final isSOSActive = appState.isSOSPeer(p.id);
+                                final isSOSActive = appState.isSOSPeer(p.name);
                                 // รวม: แสดงสีแดงถ้าอยู่ในโหมด SOS หรือกดปุ่ม SOS
                                 final isSOS = isSOSMode || isSOSActive;
 
@@ -1861,11 +1889,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String displayName = '';
   String deviceName = ''; // เพิ่มชื่อเครื่อง
   bool isSignUp = false;
-  Map<String, bool> protocols = {
-    'wifi': true,
-    'bluetooth': true,
-    'radio': false,
-  };
+  
+  // 🔄 แปลง protocols เป็น getter ที่อ่านค่าจาก appState
+  Map<String, bool> get protocols {
+    final selected = appState.selectedProtocol;
+    return {
+      'wifi': selected == 'wifi' || selected == 'wifi_direct',
+      'bluetooth': selected == 'bluetooth' || selected == 'nearby',
+      'radio': selected == 'radio' || selected == 'mesh',
+    };
+  }
 
   bool _busy = false;
   String? _error;
@@ -1965,16 +1998,63 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  void toggleProtocol(String protocol) {
-    setState(() => protocols[protocol] = !(protocols[protocol] ?? false));
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          '${protocol.toUpperCase()} ${protocols[protocol]! ? "enabled" : "disabled"}',
+  void toggleProtocol(String protocol) async {
+    // ป้องกันการ toggle protocol เดียวกันซ้ำ
+    if ((protocol == 'wifi' && appState.selectedProtocol == 'wifi_direct') ||
+        (protocol == 'bluetooth' && appState.selectedProtocol == 'nearby') ||
+        (protocol == 'radio' && appState.selectedProtocol == 'mesh')) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${protocol.toUpperCase()} protocol is already active'),
+          backgroundColor: Colors.blue,
         ),
-        backgroundColor: protocols[protocol]! ? Colors.green : Colors.grey,
-      ),
-    );
+      );
+      return;
+    }
+    
+    try {
+      // สลับ transport จริง
+      String transportName;
+      if (protocol == 'wifi') {
+        transportName = 'wifi_direct';
+      } else if (protocol == 'bluetooth') {
+        transportName = 'nearby';
+      } else if (protocol == 'radio') {
+        transportName = 'mesh';
+      } else {
+        transportName = protocol;
+      }
+      
+      await appState.switchTransport(transportName);
+      
+      // บันทึกค่า (appState.switchTransport จะบันทึกให้แล้ว แต่เก็บไว้เผื่อ backwards compatibility)
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('active_protocol', protocol);
+      
+      if (mounted) {
+        // อัพเดท UI
+        setState(() {}); // จะทำให้ protocols getter ถูกเรียกใหม่
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '✅ Switched to ${protocol.toUpperCase()} protocol successfully',
+            ),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Failed to switch protocol: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    }
   }
 
   @override

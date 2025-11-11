@@ -159,6 +159,12 @@ class NearbyTransport implements Transport {
   }
 
   void _emitPeers() {
+    // ป้องกันการ emit หลังจาก dispose
+    if (_peersCtrl.isClosed) {
+      print('⚠️ _emitPeers() skipped - controller is closed');
+      return;
+    }
+    
     final list = <Peer>[];
     print('🔍 _emitPeers() - My device name: "$deviceName"');
     print('   Total found: ${_found.length}, Total connected: ${_connected.length}');
@@ -304,11 +310,17 @@ class NearbyTransport implements Transport {
                   // ถ้าไม่ใช่ metadata = เป็นข้อความปกติ
                   if (!text.startsWith('FILE_METADATA:')) {
                     print('📩 Message content: ${text.length > 50 ? text.substring(0, 50) + "..." : text}');
-                    _msgCtrl.add(Message(
-                      fromPeerId: eid,
-                      body: text,
-                      time: DateTime.now(),
-                    ));
+                    
+                    // ป้องกันการ add หลัง dispose
+                    if (!_msgCtrl.isClosed) {
+                      _msgCtrl.add(Message(
+                        fromPeerId: eid,
+                        body: text,
+                        time: DateTime.now(),
+                      ));
+                    } else {
+                      print('⚠️ Message dropped - controller is closed');
+                    }
                   } else {
                     print('⚠️ Metadata message ไม่ควรมาถึงจุดนี้: $text');
                   }
@@ -621,11 +633,17 @@ class NearbyTransport implements Transport {
                       // ถ้าไม่ใช่ metadata = เป็นข้อความปกติ
                       if (!text.startsWith('FILE_METADATA:')) {
                         print('📩 Message content: ${text.length > 50 ? text.substring(0, 50) + "..." : text}');
-                        _msgCtrl.add(Message(
-                          fromPeerId: eid,
-                          body: text,
-                          time: DateTime.now(),
-                        ));
+                        
+                        // ป้องกันการ add หลัง dispose
+                        if (!_msgCtrl.isClosed) {
+                          _msgCtrl.add(Message(
+                            fromPeerId: eid,
+                            body: text,
+                            time: DateTime.now(),
+                          ));
+                        } else {
+                          print('⚠️ Message dropped - controller is closed');
+                        }
                       } else {
                         print('⚠️ Metadata message ไม่ควรมาถึงจุดนี้: $text');
                       }
@@ -776,12 +794,30 @@ class NearbyTransport implements Transport {
         // ⚠️ ป้องกัน bidirectional request: ใช้ชื่ออุปกรณ์เปรียบเทียบ
         // ฝั่งที่มีชื่อ "น้อยกว่า" (alphabetically) จะเป็นผู้ request
         // ฝั่งที่มีชื่อ "มากกว่า" จะรอรับการเชื่อมต่อ
+        // 🔧 ยกเว้นสำหรับ persistent peers ให้ connect เลย
         final comparison = deviceName.compareTo(name);
         
         if (comparison > 0 && !isPersistent) {
           // deviceName > name → ฉันมีชื่อมากกว่า → รอให้อีกฝั่ง request (ยกเว้น persistent peers)
           print('⏳ My name "$deviceName" > Peer name "$name"');
           print('   Waiting for peer to initiate connection (I will accept via advertising)');
+          
+          // 🔧 แต่ถ้ารอนานเกิน 5 วินาที แล้วยังไม่มี connection → ลอง request เอง
+          Future.delayed(const Duration(seconds: 5), () {
+            if (!_connected.containsKey(id) && _found.contains(id)) {
+              print('⏰ Timeout waiting for peer $name to connect - initiating connection myself');
+              _pendingConnections.add(id);
+              final delay = isPersistent ? 500 : 1500;
+              Future.delayed(Duration(milliseconds: delay), () {
+                if (!_found.contains(id) || _connected.containsKey(id)) {
+                  _pendingConnections.remove(id);
+                  return;
+                }
+                _doRequestConnection(id);
+              });
+            }
+          });
+          
           return;
         } else if (comparison == 0 && !isPersistent) {
           // ชื่อเหมือนกัน (ไม่ควรเกิด แต่ป้องกันไว้) → ใช้ ID เป็นตัวตัดสิน
@@ -799,7 +835,7 @@ class NearbyTransport implements Transport {
         _pendingConnections.add(id);
         
         // ⚡ ลด delay สำหรับ persistent peers (500ms แทน 1000ms)
-        final delay = isPersistent ? 500 : 1000;
+        final delay = isPersistent ? 500 : 1500; // 🔧 เพิ่มเป็น 1500ms ให้ advertising พร้อม
         print('📡 Endpoint found: $id (name: $name) - รอ ${delay}ms ให้ advertising พร้อม...');
         
         Future.delayed(Duration(milliseconds: delay), () {
