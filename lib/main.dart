@@ -1,4 +1,5 @@
-﻿import 'package:flutter/material.dart';
+﻿import 'dart:async';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // เพิ่ม import สำหรับ Clipboard
 import 'package:geolocator/geolocator.dart'; // เพิ่ม import สำหรับ GPS
 import 'package:firebase_messaging/firebase_messaging.dart'; // เพิ่มสำหรับ FCM
@@ -7,18 +8,17 @@ import 'core/app_state.dart';
 import 'core/app_theme.dart'; // Import ธีมใหม่
 import 'cloud/firebase_service.dart';
 import 'core/fcm_service.dart'; // เพิ่ม FCM Service
-import 'ui/MapScreen.dart';
 import 'ui/notification_panel.dart';
 import 'core/notification_service.dart';
 import 'ui/friends_screen.dart';
 import 'ui/profile_screen.dart';
-import 'core/friend_service.dart';
 import 'ui/emergency_chat_screen.dart';
 import 'ui/device_name_setup_screen.dart';
 import 'ui/debug_screen.dart'; // เพิ่ม import หน้า Debug
 import 'ui/chat_history_screen.dart'; // เพิ่มสำหรับหน้าประวัติแชท
 import 'widgets/floating_notification.dart'; // เพิ่ม floating notification
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:offgrid_sos/core/logger.dart';
 
 bool dummySwitch1 = false;
 bool dummySwitch2 = false;
@@ -47,10 +47,10 @@ void main() async {
   // ถ้ามีชื่อแล้ว ให้อัพเดทใน appState
   if (deviceName != null && deviceName.isNotEmpty) {
     appState.setDeviceName(deviceName);
-    debugPrint('📱 โหลดชื่อเครื่อง: $deviceName');
+    Log.d('📱 โหลดชื่อเครื่อง: $deviceName');
   }
   
-  debugPrint('🎨 ธีมเริ่มต้น: $themeMode');
+  Log.d('🎨 ธีมเริ่มต้น: $themeMode');
 
   runApp(
     OffGridApp(
@@ -153,222 +153,27 @@ class _RootNavState extends State<RootNav> {
 
   final _pages = [
     const HomeScreen(),
-    const MapScreen(),
-    const ChatHistoryScreen(), // เปลี่ยนจาก NotificationsScreen เป็น ChatHistoryScreen
+    const ChatHistoryScreen(),
+    const FriendsScreen(),
+    const ProfileScreen(),
     const SettingsScreen(),
   ];
 
   final _items = const [
-    _NavItem(icon: Icons.home, label: 'หน้าหลัก'),
-    _NavItem(icon: Icons.map, label: 'แผนที่'),
-    _NavItem(icon: Icons.warning_amber_rounded, label: 'SOS', isSOS: true),
-    _NavItem(icon: Icons.chat, label: 'แชท'), // เปลี่ยนจากการแจ้งเตือนเป็นแชท
-    _NavItem(icon: Icons.settings, label: 'การตั้งค่า'),
+    _NavItem(icon: Icons.home_rounded, label: 'Home'),
+    _NavItem(icon: Icons.chat_bubble_outline_rounded, label: 'Chat'),
+    _NavItem(icon: Icons.people_outline_rounded, label: 'Friends'),
+    _NavItem(icon: Icons.person_outline_rounded, label: 'Profile'),
+    _NavItem(icon: Icons.settings_outlined, label: 'Settings'),
   ];
 
   void _onNavTap(int i) {
-    // Handle SOS button tap
-    if (_items[i].isSOS) {
-      _handleSOSTap();
-      return;
-    }
-
-    // Adjust index for other items since SOS is in the middle
-    int pageIndex = i;
-    if (i > 2) pageIndex = i - 1; // Skip SOS for page navigation
-
-    setState(() => _index = pageIndex);
-  }
-
-  void _handleSOSTap() async {
-    // สั่นเตือนทันที
-    HapticFeedback.heavyImpact();
-
-    // ตรวจสอบจำนวนอุปกรณ์ที่เชื่อมต่อ (ดูจาก peers ที่ scan พบ)
-    final connectedCount = appState.peers.length;
-
-    // ถ้าไม่มีอุปกรณ์ในรายการ → แจ้งเตือนและเสนอให้สแกน
-    if (connectedCount == 0) {
-      if (!mounted) return;
-
-      final shouldScan = await showDialog<bool>(
-        context: context,
-        builder: (ctx) {
-          final theme = Theme.of(ctx);
-          return AlertDialog(
-            icon: Icon(
-              Icons.warning_amber_rounded,
-              color: theme.colorScheme.secondary,
-              size: 28,
-            ),
-            title: Text(
-              'ไม่มีอุปกรณ์ใกล้เคียง',
-              style: theme.textTheme.titleLarge,
-            ),
-            content: Text(
-              'ยังไม่พบอุปกรณ์ใกล้เคียง\nต้องการสแกนหาอุปกรณ์ก่อนส่ง SOS หรือไม่?',
-              style: theme.textTheme.bodyMedium,
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('ยกเลิก'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('สแกนเลย'),
-              ),
-            ],
-          );
-        },
-      );
-
-      if (shouldScan == true) {
-        // เปลี่ยนไปหน้าหลักและเปิด scan dialog
-        setState(() => _index = 0);
-      }
-      return;
-    }
-
-    // มีอุปกรณ์ในรายการ → แสดง Dialog ยืนยัน
-    if (!mounted) return;
-
-    final confirm = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) {
-        final theme = Theme.of(ctx);
-        final cs = theme.colorScheme;
-        return AlertDialog(
-          icon: Icon(Icons.warning_amber_rounded, color: cs.primary, size: 32),
-          title: Text('ส่งสัญญาณ SOS?', style: theme.textTheme.headlineSmall),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'จะส่งสัญญาณฉุกเฉินแบบ Broadcast ไปยังอุปกรณ์ใกล้เคียงทั้งหมด',
-                style: theme.textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: cs.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.radar, color: cs.secondary, size: 20),
-                    const SizedBox(width: 8),
-                    Text(
-                      'อุปกรณ์ใกล้เคียง: $connectedCount เครื่อง',
-                      style: theme.textTheme.titleSmall,
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('ยกเลิก'),
-            ),
-            FilledButton.icon(
-              onPressed: () => Navigator.pop(ctx, true),
-              icon: const Icon(Icons.warning_amber_rounded, size: 20),
-              label: const Text('ส่ง SOS'),
-            ),
-          ],
-        );
-      },
-    );
-
-    // ถ้ายกเลิก → ไม่ทำอะไร
-    if (confirm != true) return;
-
-    // สั่นอีกครั้งก่อนส่ง
-    HapticFeedback.heavyImpact();
-
-    // 📍 ดึงพิกัด GPS ปัจจุบัน
-    String? latitude;
-    String? longitude;
-    try {
-      final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-        timeLimit: const Duration(seconds: 5),
-      );
-      latitude = position.latitude.toStringAsFixed(6);
-      longitude = position.longitude.toStringAsFixed(6);
-      debugPrint('📍 GPS Location: $latitude, $longitude');
-    } catch (e) {
-      debugPrint('⚠️ Cannot get GPS location: $e');
-    }
-
-    // ส่ง SOS พร้อมข้อมูลเวลาและพิกัด
-    final now = DateTime.now();
-    final timeStr =
-        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}';
-    
-    // สร้างข้อความ SOS
-    String message = '🚨 SOS: ช่วยด้วย! ฉันอยู่ในสถานการณ์ฉุกเฉิน\n⏰ เวลา: $timeStr';
-    if (latitude != null && longitude != null) {
-      final googleMapsUrl = 'https://www.google.com/maps?q=$latitude,$longitude';
-      message += '\n📍 ตำแหน่ง: $googleMapsUrl';
-    }
-
-    // ⚡ ส่งข้อความ SOS ไปยังอุปกรณ์ใกล้เคียง (ไม่ await เพื่อความเร็ว)
-    appState.send(message);
-    
-    // ⚡ เปลี่ยนโหมดเป็น SOS อัตโนมัติทันที (ถ้ายังไม่ได้เปิด) - ไม่ await
-    if (!appState.isSOSActive) {
-      appState.toggleSOSMode();
-    }
-    
-    // ⚡ เปิดโหมด SOS และ Broadcast สถานะพร้อมพิกัด (ไม่ await)
-    appState.broadcastSOSStatus(
-      isActive: true,
-      latitude: latitude != null ? double.parse(latitude) : null,
-      longitude: longitude != null ? double.parse(longitude) : null,
-    );
-
-    // บันทึก Log
-    debugPrint('🚨 SOS SENT (broadcast) to $connectedCount devices at $now');
-
-    // แสดงการยืนยัน
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Row(
-            children: [
-              const Icon(Icons.check_circle, color: Colors.white),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  '✅ ส่ง SOS สำเร็จ!\nกำลังส่งแบบ Broadcast ไปยังอุปกรณ์ใกล้เคียง',
-                  style: const TextStyle(fontSize: 15),
-                ),
-              ),
-            ],
-          ),
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-        ),
-      );
-
-      // สั่นเบา ๆ เป็นยืนยัน
-      Future.delayed(const Duration(milliseconds: 200), () {
-        HapticFeedback.mediumImpact();
-      });
-    }
+    setState(() => _index = i);
   }
 
   void _onHorizontalDrag(DragUpdateDetails details) {
     if (details.primaryDelta != null && details.primaryDelta!.abs() > 10) {
-      if (details.primaryDelta! < 0 && _index < _items.length - 1) {
+      if (details.primaryDelta! < 0 && _index < _pages.length - 1) {
         setState(() => _index += 1);
       } else if (details.primaryDelta! > 0 && _index > 0) {
         setState(() => _index -= 1);
@@ -378,167 +183,56 @@ class _RootNavState extends State<RootNav> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-
     return Scaffold(
-      body: _pages[_index],
-      // Custom floating nav bar
-      bottomNavigationBar: Padding(
-        padding: const EdgeInsets.only(bottom: 8, left: 12, right: 12),
-        child: GestureDetector(
-          onHorizontalDragUpdate: _onHorizontalDrag,
-          child: Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [cs.surfaceContainer, cs.surfaceContainerHigh],
-              ),
-              borderRadius: BorderRadius.circular(22),
-              border: Border.all(
-                color: cs.outlineVariant.withOpacity(0.3),
-                width: 1,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: cs.shadow.withOpacity(0.2),
-                  blurRadius: 16,
-                  offset: const Offset(0, 4),
-                ),
-              ],
+      body: GestureDetector(
+        onHorizontalDragUpdate: _onHorizontalDrag,
+        child: _pages[_index],
+      ),
+      bottomNavigationBar: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border(top: BorderSide(color: Colors.grey.shade200, width: 0.5)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.06),
+              blurRadius: 12,
+              offset: const Offset(0, -2),
             ),
-            height: 68, // เพิ่มจาก 60 เป็น 68
+          ],
+        ),
+        child: SafeArea(
+          top: false,
+          child: SizedBox(
+            height: 56,
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: List.generate(_items.length, (i) {
                 final item = _items[i];
-                final selected =
-                    !item.isSOS &&
-                    i == _index + (i > 2 ? 1 : 0); // Adjust selection for SOS
-
-                if (item.isSOS) {
-                  // Special SOS button in the center with scale animation - ใหญ่ขึ้น
-                  return Expanded(
-                    flex: 2, // ทำให้ SOS ใหญ่กว่าปุ่มอื่น 2 เท่า
-                    child: TweenAnimationBuilder<double>(
-                      tween: Tween(begin: 1.0, end: 1.0),
-                      duration: const Duration(milliseconds: 200),
-                      builder: (context, scale, child) {
-                        return Transform.scale(
-                          scale: scale,
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(20),
-                            onTap: () {
-                              // Trigger haptic feedback
-                              HapticFeedback.heavyImpact();
-                              _onNavTap(i);
-                            },
-                            onTapDown: (_) {
-                              // Scale down animation
-                              (context as Element).markNeedsBuild();
-                            },
-                            child: Container(
-                              margin: const EdgeInsets.symmetric(
-                                vertical: 4,
-                                horizontal: 8,
-                              ),
-                              decoration: BoxDecoration(
-                                gradient: const LinearGradient(
-                                  colors: [
-                                    Color(0xFFE53E3E),
-                                    Color(0xFFFF0000),
-                                  ],
-                                  begin: Alignment.topCenter,
-                                  end: Alignment.bottomCenter,
-                                ),
-                                borderRadius: BorderRadius.circular(20),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.red.withOpacity(0.5),
-                                    blurRadius: 12,
-                                    spreadRadius: 2,
-                                    offset: const Offset(0, 3),
-                                  ),
-                                ],
-                              ),
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(
-                                    item.icon,
-                                    color: Colors.white,
-                                    size: 32, // เพิ่มจาก 24 เป็น 32
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    item.label,
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 13, // เพิ่มจาก 11 เป็น 13
-                                      fontWeight: FontWeight.bold,
-                                      letterSpacing: 0.5,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  );
-                }
-
-                // Regular navigation items - ลดขนาดลง
+                final selected = i == _index;
                 return Expanded(
-                  flex: 1, // ปุ่มปกติมี flex = 1
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(16),
+                  child: GestureDetector(
                     onTap: () {
                       HapticFeedback.lightImpact();
                       _onNavTap(i);
                     },
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 300),
-                      padding: const EdgeInsets.symmetric(
-                        vertical: 6,
-                        horizontal: 0,
-                      ),
-                      decoration: BoxDecoration(
-                        color: selected
-                            ? cs.primaryContainer.withOpacity(0.5)
-                            : Colors.transparent,
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          AnimatedContainer(
-                            duration: const Duration(milliseconds: 300),
-                            child: Icon(
-                              item.icon,
-                              color: selected
-                                  ? cs.primary
-                                  : cs.onSurfaceVariant,
-                              size: selected ? 22 : 20, // ลดจาก 24:22 เป็น 22:20
-                            ),
+                    behavior: HitTestBehavior.opaque,
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          item.icon,
+                          color: selected ? const Color(0xFFD32F2F) : const Color(0xFF8E8E93),
+                          size: 24,
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          item.label,
+                          style: TextStyle(
+                            color: selected ? const Color(0xFFD32F2F) : const Color(0xFF8E8E93),
+                            fontSize: 10,
+                            fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
                           ),
-                          const SizedBox(height: 2),
-                          Text(
-                            item.label,
-                            style: TextStyle(
-                              color: selected
-                                  ? cs.primary
-                                  : cs.onSurfaceVariant,
-                              fontSize: selected ? 10 : 9, // ลดจาก 11:10 เป็น 10:9
-                              fontWeight: selected
-                                  ? FontWeight.bold
-                                  : FontWeight.normal,
-                            ),
-                          ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
                   ),
                 );
@@ -554,8 +248,7 @@ class _RootNavState extends State<RootNav> {
 class _NavItem {
   final IconData icon;
   final String label;
-  final bool isSOS;
-  const _NavItem({required this.icon, required this.label, this.isSOS = false});
+  const _NavItem({required this.icon, required this.label});
 }
 
 class HomeScreen extends StatefulWidget {
@@ -568,350 +261,495 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
   late AnimationController _blinkController;
 
+  // Hold-to-emergency state
+  Timer? _holdTimer;
+  double _holdProgress = 0.0;
+  bool _isHolding = false;
+  bool _isEmergencyActive = false;
+  ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? _warningSnackBar;
+
   @override
   void initState() {
     super.initState();
     _blinkController = AnimationController(
-      duration: const Duration(milliseconds: 800),
+      duration: const Duration(milliseconds: 600),
       vsync: this,
     )..repeat(reverse: true);
+    // TODO: remove mock — for UI preview only
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      appState.DEBUG_addMockPeer();
+    });
   }
 
   @override
   void dispose() {
+    _holdTimer?.cancel();
     _blinkController.dispose();
     super.dispose();
   }
 
-  // 🔄 ฟังก์ชันสลับ Protocol
-  void _switchProtocol(BuildContext context, String protocol) {
-    // ป้องกันการ toggle protocol เดียวกันซ้ำ
-    if ((protocol == 'wifi' && appState.selectedProtocol == 'wifi_direct') ||
-        (protocol == 'bluetooth' && appState.selectedProtocol == 'nearby') ||
-        (protocol == 'radio' && appState.selectedProtocol == 'mesh')) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('${protocol.toUpperCase()} protocol กำลังทำงานอยู่แล้ว'),
-          backgroundColor: Colors.blue,
-          duration: const Duration(seconds: 1),
-        ),
-      );
-      return;
-    }
-    
-    // แสดงชื่อที่อ่านง่าย
-    String displayName = protocol == 'wifi' ? 'WiFi Direct' 
-                       : protocol == 'bluetooth' ? 'Bluetooth'
-                       : 'Radio Mesh';
-    
-    // แสดงข้อความกำลังสลับทันที
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('🔄 กำลังสลับไปยัง $displayName...'),
-        backgroundColor: Colors.orange,
-        duration: const Duration(milliseconds: 800),
-      ),
-    );
-    
-    // กำหนด transport name
-    String transportName;
-    if (protocol == 'wifi') {
-      transportName = 'wifi_direct';
-    } else if (protocol == 'bluetooth') {
-      transportName = 'nearby';
-    } else if (protocol == 'radio') {
-      transportName = 'mesh';
-    } else {
-      transportName = protocol;
-    }
-    
-    // ทำงานใน background
-    appState.switchTransport(transportName).then((_) async {
-      // บันทึกค่า
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('active_protocol', protocol);
-      
+  // Unified SOS handler: tap = normal help, hold 5s = emergency
+  Future<void> _handleSOSTap(BuildContext context, {bool emergency = false}) async {
+    final wasActive = appState.isSOSActive;
+
+    // กด normal tap ขณะ SOS active → ปิด SOS
+    // กด emergency hold ขณะ SOS active → อัพเกรดเป็น emergency (ไม่ปิด)
+    if (wasActive && !emergency) {
+      HapticFeedback.mediumImpact();
+      await appState.toggleSOSMode();
+      setState(() { _isEmergencyActive = false; });
+      if (appState.peers.isNotEmpty) {
+        appState.broadcastSOSStatus(isActive: false);
+      }
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('✅ สลับไปยัง $displayName สำเร็จ'),
-            backgroundColor: Colors.green,
-            duration: const Duration(seconds: 2),
-          ),
+          const SnackBar(content: Text('ปิดการขอความช่วยเหลือ'), duration: Duration(seconds: 2)),
         );
       }
-    }).catchError((e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('❌ ไม่สามารถสลับโปรโตคอลได้: $e'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 3),
-          ),
-        );
+      return;
+    }
+
+    // emergency hold ขณะ SOS active → อัพเกรดเป็น emergency โดยไม่ toggle
+    if (!wasActive) {
+      await appState.toggleSOSMode();
+    }
+
+    if (emergency) {
+      HapticFeedback.heavyImpact();
+      setState(() { _isEmergencyActive = true; });
+    } else {
+      HapticFeedback.mediumImpact();
+      setState(() { _isEmergencyActive = false; });
+    }
+
+    String? latitude;
+    String? longitude;
+    try {
+      final position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 5),
+      );
+      latitude = position.latitude.toStringAsFixed(6);
+      longitude = position.longitude.toStringAsFixed(6);
+    } catch (e) {
+      Log.d('⚠️ Cannot get GPS location: $e');
+    }
+
+    if (appState.peers.isNotEmpty) {
+      final now = DateTime.now();
+      final timeStr = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}';
+      final String message;
+      if (emergency) {
+        message = '🚨 SOS ฉุกเฉิน! ต้องการความช่วยเหลือด่วน!\n⏰ เวลา: $timeStr'
+            + (latitude != null && longitude != null ? '\n📍 ตำแหน่ง: https://www.google.com/maps?q=$latitude,$longitude' : '');
+      } else {
+        message = '🆘 ขอความช่วยเหลือ\n⏰ เวลา: $timeStr'
+            + (latitude != null && longitude != null ? '\n📍 ตำแหน่ง: https://www.google.com/maps?q=$latitude,$longitude' : '');
+      }
+      appState.send(message);
+      appState.broadcastSOSStatus(
+        isActive: true,
+        isEmergency: emergency,
+        latitude: latitude != null ? double.parse(latitude) : null,
+        longitude: longitude != null ? double.parse(longitude) : null,
+      );
+    }
+
+    if (context.mounted && !emergency) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('ส่งคำขอความช่วยเหลือแล้ว'), duration: Duration(seconds: 2)),
+      );
+    }
+  }
+
+  void _startHold(BuildContext context) {
+    if (_isHolding) return;
+    _isHolding = true;
+    _holdProgress = 0.0;
+
+    _warningSnackBar = ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Row(
+          children: [
+            Icon(Icons.gavel, color: Colors.white, size: 18),
+            SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'หากกดขอความช่วยเหลือโดยไม่ได้มีเหตุจำเป็น มีโทษทางกฎหมาย',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: const Color(0xFFE65100),
+        duration: const Duration(seconds: 10),
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
+
+    const totalMs = 5000;
+    const intervalMs = 80;
+    _holdTimer = Timer.periodic(const Duration(milliseconds: intervalMs), (timer) {
+      if (!_isHolding || !mounted) {
+        timer.cancel();
+        if (mounted) setState(() { _holdProgress = 0.0; });
+        return;
+      }
+      setState(() { _holdProgress = (_holdProgress + intervalMs / totalMs).clamp(0.0, 1.0); });
+      if (_holdProgress >= 1.0) {
+        timer.cancel();
+        _isHolding = false;
+        setState(() { _holdProgress = 0.0; });
+        _warningSnackBar?.close();
+        _warningSnackBar = null;
+        _handleSOSTap(context, emergency: true);
       }
     });
   }
 
-  // Helper method สำหรับสร้าง content ของ peer card
-  Widget _buildPeerCardContent(
-    Peer p,
-    bool isSOS,
-    bool isSOSActive,
-    bool isRescue,
-    AppState appState,
-  ) {
-    return Row(
-      children: [
-        // 🚨 Icon SOS / 🚑 Icon หน่วยกู้ภัย / icon ปกติ
-        Icon(
-          isSOS
-              ? Icons.warning_amber_rounded
-              : isRescue
-                  ? Icons.local_hospital
-                  : Icons.device_hub,
-          color: isSOS
-              ? Colors.red
-              : isRescue
-                  ? Colors.blue
-                  : Colors.blue,
-          size: 18,
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Flexible(
-                    child: Text(
-                      p.name.isNotEmpty ? p.name : 'อุปกรณ์ไม่ระบุชื่อ',
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white, // เปลี่ยนเป็นสีขาว
-                      ),
+  void _cancelHold() {
+    if (!_isHolding) return;
+    _isHolding = false;
+    _holdTimer?.cancel();
+    _warningSnackBar?.close();
+    _warningSnackBar = null;
+    if (mounted) setState(() { _holdProgress = 0.0; });
+  }
+
+  Widget _buildStatusBadge(bool isSOSActive) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 400),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: isSOSActive ? const Color(0xFFFFEBEE) : const Color(0xFFE8F5E9),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          AnimatedBuilder(
+            animation: _blinkController,
+            builder: (context, _) => Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(
+                color: isSOSActive
+                    ? Color.lerp(Colors.red, Colors.redAccent, _blinkController.value)!
+                    : const Color(0xFF4CAF50),
+                shape: BoxShape.circle,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            isSOSActive ? 'SOS Active' : "You're Safe",
+            style: TextStyle(
+              color: isSOSActive ? Colors.red.shade700 : const Color(0xFF2E7D32),
+              fontWeight: FontWeight.w600,
+              fontSize: 14,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSOSCircleButton(BuildContext context, bool isSOSActive) {
+    return GestureDetector(
+      onTap: () {
+        if (_isHolding) return;
+        _handleSOSTap(context, emergency: false);
+      },
+      onLongPressStart: (_) {
+        if (_isEmergencyActive) return; // ถ้าเป็น emergency อยู่แล้ว ไม่ต้อง hold ซ้ำ
+        _startHold(context);
+      },
+      onLongPressEnd: (_) => _cancelHold(),
+      onLongPressCancel: () => _cancelHold(),
+      child: AnimatedBuilder(
+        animation: _blinkController,
+        builder: (context, _) {
+          final pulse = _blinkController.value;
+          final isEmergency = isSOSActive && _isEmergencyActive;
+          final buttonColor = isEmergency
+              ? Color.lerp(const Color(0xFFB71C1C), const Color(0xFFD32F2F), pulse)!
+              : const Color(0xFFD32F2F);
+          return SizedBox(
+            width: 260,
+            height: 260,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                if (isSOSActive) ...[
+                  Container(
+                    width: 210 + (pulse * (isEmergency ? 50 : 40)),
+                    height: 210 + (pulse * (isEmergency ? 50 : 40)),
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.red.withOpacity((1 - pulse) * (isEmergency ? 0.14 : 0.08)),
                     ),
                   ),
-                  // � Badge Mesh Connection (ถ้าไม่ใช่ direct)
-                  if (!p.nearby && appState.selectedProtocol == 'mesh') ...[
-                    const SizedBox(width: 4),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.purple.shade700,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Text(
-                        '📡 mesh',
-                        style: TextStyle(
-                          fontSize: 9,
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
+                  Container(
+                    width: 188 + (pulse * (isEmergency ? 30 : 24)),
+                    height: 188 + (pulse * (isEmergency ? 30 : 24)),
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.red.withOpacity((1 - pulse) * (isEmergency ? 0.18 : 0.12)),
                     ),
-                  ],
-                  // �🚨 Badge SOS สีแดง
-                  if (isSOS) ...[
-                    const SizedBox(width: 4),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.red,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Text(
-                        '🚨 SOS',
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
+                  ),
+                ] else ...[
+                  Container(
+                    width: 200,
+                    height: 200,
+                    decoration: const BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Color(0x14D32F2F),
                     ),
-                  ],
-                  // 🚑 Badge หน่วยกู้ภัย
-                  if (isRescue && !isSOS) ...[
-                    const SizedBox(width: 4),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.blue,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Text(
-                        '🚑 กู้ภัย',
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ],
+                  ),
                 ],
-              ),
-              Text(
-                'ID: ${p.id}',
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: Colors.white70, // เปลี่ยนเป็นสีขาวโปร่งแสง
-                ),
-              ),
-              // 📍 แสดงระยะห่าง (อัพเดททุก 5 วินาที)
-              StreamBuilder<Position>(
-                stream: Geolocator.getPositionStream(
-                  locationSettings: const LocationSettings(
-                    accuracy: LocationAccuracy.best,
-                    distanceFilter: 1, // อัพเดทเมื่อเคลื่อนที่ 1 เมตร
+                // Hold progress ring
+                if (_holdProgress > 0)
+                  SizedBox(
+                    width: 186,
+                    height: 186,
+                    child: CircularProgressIndicator(
+                      value: _holdProgress,
+                      strokeWidth: 7,
+                      color: Colors.orangeAccent,
+                      backgroundColor: Colors.red.withOpacity(0.2),
+                    ),
                   ),
-                ),
-                builder: (context, snapshot) {
-                  Position? myPosition;
-
-                  if (snapshot.hasData) {
-                    myPosition = snapshot.data;
-                  } else {
-                    // Fallback: ถ้าไม่มี stream ให้แสดงข้อความรอ
-                    return Row(
-                      children: [
-                        const SizedBox(
-                          width: 10,
-                          height: 10,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          'กำลังหา GPS...',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: Colors.grey.shade600,
-                          ),
-                        ),
-                      ],
-                    );
-                  }
-
-                  final distance = appState.getDistanceToPeerSync(p.id, myPosition);
-
-                  if (distance == null) {
-                    // แสดงว่ายังไม่ได้รับตำแหน่ง GPS ของ peer
-                    return Row(
-                      children: [
-                        Icon(
-                          Icons.location_off,
-                          size: 12,
-                          color: Colors.grey.shade400,
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          'ไม่มีตำแหน่ง',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: Colors.grey.shade400,
-                          ),
-                        ),
-                      ],
-                    );
-                  }
-
-                  // แปลงหน่วย: < 1 km แสดงเป็นเมตร, >= 1 km แสดงเป็น km
-                  String distanceText;
-                  Color distanceColor;
-
-                  if (distance < 1000) {
-                    distanceText = '${distance.toStringAsFixed(0)} m';
-                    // สีเขียวถ้าใกล้มาก (< 10m), เหลืองถ้าปานกลาง, ส้มถ้าไกล
-                    if (distance < 10) {
-                      distanceColor = Colors.green.shade700;
-                    } else if (distance < 50) {
-                      distanceColor = Colors.orange.shade700;
-                    } else {
-                      distanceColor = Colors.grey.shade700;
-                    }
-                  } else {
-                    distanceText = '${(distance / 1000).toStringAsFixed(2)} km';
-                    distanceColor = Colors.grey.shade700;
-                  }
-
-                  return Row(
+                Container(
+                  width: 170,
+                  height: 170,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: buttonColor,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.red.withOpacity(isSOSActive ? (isEmergency ? 0.6 : 0.45) : 0.25),
+                        blurRadius: isSOSActive ? (isEmergency ? 50 : 40) : 20,
+                        spreadRadius: isSOSActive ? (isEmergency ? 12 : 8) : 2,
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Icon(
-                        Icons.my_location,
-                        size: 12,
-                        color: distanceColor,
+                        isEmergency ? Icons.crisis_alert : Icons.warning_amber_rounded,
+                        size: 54,
+                        color: Colors.white,
                       ),
-                      const SizedBox(width: 4),
-                      Text(
-                        distanceText,
+                      const SizedBox(height: 4),
+                      const Text(
+                        'SOS',
                         style: TextStyle(
-                          fontSize: 11,
-                          color: distanceColor,
-                          fontWeight: FontWeight.w500,
+                          fontSize: 30,
+                          fontWeight: FontWeight.w900,
+                          color: Colors.white,
+                          letterSpacing: 2,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        _holdProgress > 0
+                            ? 'Emergency in ${((1.0 - _holdProgress) * 5).ceil()}s...'
+                            : isSOSActive
+                                ? (isEmergency ? 'EMERGENCY ACTIVE' : 'HELP ACTIVE')
+                                : 'Tap / Hold 5s',
+                        style: TextStyle(
+                          fontSize: _holdProgress > 0 ? 10 : 12,
+                          fontWeight: FontWeight.w400,
+                          color: Colors.white70,
                         ),
                       ),
                     ],
-                  );
-                },
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(width: 8),
-        ElevatedButton.icon(
-          onPressed: () {
-            Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => EmergencyChatScreen(peer: p),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// 📡 รายการโปรโตคอลการเชื่อมต่อที่เลือกได้
+  static const _protocolOptions = [
+    (key: 'nearby', label: 'Nearby Connections', subtitle: 'BLE + WiFi รวมกัน (แนะนำ)', icon: Icons.share_outlined),
+    (key: 'ble', label: 'Bluetooth LE', subtitle: 'เชื่อมต่อผ่าน BLE โดยตรง', icon: Icons.bluetooth),
+    (key: 'wifi_direct', label: 'WiFi Direct', subtitle: 'ต้องเปิด WiFi Direct ทั้ง 2 เครื่อง', icon: Icons.wifi_tethering),
+    (key: 'mesh', label: 'Radio Mesh', subtitle: 'ส่งต่อข้อความหลาย hop ผ่านอุปกรณ์ตัวกลาง', icon: Icons.hub_outlined),
+  ];
+
+  void _showProtocolPicker(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) {
+        // 🔒 อยู่นอก StatefulBuilder.builder เพื่อให้ค่าคงอยู่ข้าม rebuild ของ setSheetState
+        var isSwitching = false;
+
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 20),
+                      child: Text(
+                        'เลือกโปรโตคอลการเชื่อมต่อ',
+                        style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    for (final option in _protocolOptions)
+                      ListTile(
+                        leading: Icon(
+                          option.icon,
+                          color: appState.selectedProtocol == option.key ? const Color(0xFF1976D2) : Colors.grey[600],
+                        ),
+                        title: Text(
+                          option.label,
+                          style: TextStyle(
+                            fontWeight: appState.selectedProtocol == option.key ? FontWeight.bold : FontWeight.normal,
+                          ),
+                        ),
+                        subtitle: Text(option.subtitle, style: const TextStyle(fontSize: 12)),
+                        trailing: appState.selectedProtocol == option.key
+                            ? const Icon(Icons.check_circle, color: Color(0xFF1976D2))
+                            : null,
+                        enabled: !isSwitching,
+                        onTap: appState.selectedProtocol == option.key
+                            ? null
+                            : () async {
+                                setSheetState(() => isSwitching = true);
+                                try {
+                                  await appState.switchTransport(option.key);
+                                  if (sheetContext.mounted) Navigator.pop(sheetContext);
+                                  if (mounted) {
+                                    ScaffoldMessenger.of(this.context).showSnackBar(
+                                      SnackBar(
+                                        content: Text('✅ สลับไปใช้ ${option.label} แล้ว'),
+                                        backgroundColor: Colors.green,
+                                      ),
+                                    );
+                                  }
+                                } catch (e) {
+                                  setSheetState(() => isSwitching = false);
+                                  if (mounted) {
+                                    ScaffoldMessenger.of(this.context).showSnackBar(
+                                      SnackBar(
+                                        content: Text('❌ สลับโปรโตคอลไม่สำเร็จ: $e'),
+                                        backgroundColor: Colors.red,
+                                      ),
+                                    );
+                                  }
+                                }
+                              },
+                      ),
+                    if (isSwitching)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 12),
+                        child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                      ),
+                  ],
+                ),
               ),
             );
           },
-          icon: const Icon(Icons.chat, size: 14),
-          label: const Text(
-            'แชท',
-            style: TextStyle(fontSize: 12),
-          ),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: isRescue ? Colors.blue : Colors.green,
-            foregroundColor: Colors.white,
-            minimumSize: const Size(70, 32),
-            padding: const EdgeInsets.symmetric(
-              horizontal: 8,
-              vertical: 4,
-            ),
-          ),
-        ),
-      ],
+        );
+      },
     );
   }
+
+  Widget _buildRescueOthersButton(BuildContext context, bool isRescueMode) {
+    return GestureDetector(
+      onTap: () {
+        HapticFeedback.mediumImpact();
+        appState.toggleRescueMode().then((_) {
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(!isRescueMode ? 'เปิดโหมดหน่วยกู้ภัย' : 'ปิดโหมดหน่วยกู้ภัย'),
+                duration: const Duration(seconds: 2),
+              ),
+            );
+          }
+        });
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 300),
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 18),
+        decoration: BoxDecoration(
+          color: isRescueMode ? const Color(0x141565C0) : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFF1976D2), width: 2),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              isRescueMode ? Icons.shield : Icons.shield_outlined,
+              color: const Color(0xFF1976D2),
+              size: 22,
+            ),
+            const SizedBox(width: 10),
+            Text(
+              isRescueMode ? 'Rescue Mode: ON' : 'Rescue Others',
+              style: const TextStyle(
+                color: Color(0xFF1976D2),
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+
 
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: appState,
       builder: (context, _) {
+        final isSOSActive = appState.isSOSActive;
+        final isRescueMode = appState.isRescueMode;
         final peers = appState.peers;
-        final theme = Theme.of(context);
-        final cs = theme.colorScheme;
 
         return Scaffold(
+          backgroundColor: const Color(0xFFF2F2F7),
           appBar: AppBar(
-            title: const Text('หน้าหลัก'),
-            backgroundColor: cs.surface,
+            title: const Text(
+              'SOS Rescue',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.black),
+            ),
+            leading: IconButton(
+              icon: const Icon(Icons.settings_input_antenna, color: Colors.black87),
+              tooltip: 'เลือกโปรโตคอลการเชื่อมต่อ',
+              onPressed: () => _showProtocolPicker(context),
+            ),
+            backgroundColor: Colors.white,
             elevation: 0,
+            centerTitle: true,
+            bottom: PreferredSize(
+              preferredSize: const Size.fromHeight(0.5),
+              child: Container(height: 0.5, color: const Color(0xFFE0E0E0)),
+            ),
             actions: [
-              // ปุ่มการแจ้งเตือน (ย้ายมาจากแท็บล่าง) พร้อม badge แสดงจำนวน
               AnimatedBuilder(
                 animation: NotificationService(),
                 builder: (context, child) {
@@ -919,17 +757,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   return Stack(
                     children: [
                       IconButton(
-                        icon: const Icon(Icons.notifications),
+                        icon: const Icon(Icons.notifications_outlined, color: Colors.black87),
                         onPressed: () {
                           Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (context) => const NotificationsScreen(),
-                            ),
+                            MaterialPageRoute(builder: (context) => const NotificationsScreen()),
                           );
                         },
-                        tooltip: 'การแจ้งเตือน',
                       ),
-                      // Badge แสดงจำนวนการแจ้งเตือน
                       if (notificationCount > 0)
                         Positioned(
                           right: 8,
@@ -939,22 +773,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                             decoration: BoxDecoration(
                               color: Colors.red,
                               shape: BoxShape.circle,
-                              border: Border.all(
-                                color: Colors.white,
-                                width: 1.5,
-                              ),
+                              border: Border.all(color: Colors.white, width: 1.5),
                             ),
-                            constraints: const BoxConstraints(
-                              minWidth: 18,
-                              minHeight: 18,
-                            ),
+                            constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
                             child: Text(
                               notificationCount > 9 ? '9+' : '$notificationCount',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
-                              ),
+                              style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
                               textAlign: TextAlign.center,
                             ),
                           ),
@@ -965,771 +789,213 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               ),
             ],
           ),
-          body: Stack(
-            children: [
-              // Main content
-              SingleChildScrollView(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 8,
-                  ),
-                  child: Column(
-                    children: [
-                      const SizedBox(height: 16), // ลดจาก 60 เหลือ 16
-
-                      // Discovered Devices (แสดงเป็น simple card) - ย้ายขึ้นมาบนสุด
-                      if (peers.isNotEmpty) ...[
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                              colors: [
-                                cs.surfaceContainer,
-                                cs.surfaceContainerHigh,
-                              ],
+          body: SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Column(
+                children: [
+                  const SizedBox(height: 32),
+                  _buildStatusBadge(isSOSActive),
+                  const SizedBox(height: 40),
+                  _buildSOSCircleButton(context, isSOSActive),
+                  const SizedBox(height: 32),
+                  _buildRescueOthersButton(context, isRescueMode),
+                  const SizedBox(height: 16),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.devices, color: Colors.blue, size: 20),
+                            const SizedBox(width: 8),
+                            const Text(
+                              'Nearby Devices',
+                              style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.black87),
                             ),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(
-                              color: cs.outline.withOpacity(0.3),
-                              width: 1,
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: cs.shadow.withOpacity(0.1),
-                                blurRadius: 8,
-                                offset: const Offset(0, 4),
+                            const Spacer(),
+                            if (peers.isNotEmpty)
+                              Text('${peers.length} device${peers.length > 1 ? 's' : ''}', style: const TextStyle(fontSize: 13, color: Colors.grey)),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        if (peers.isEmpty)
+                          const Center(
+                            child: Padding(
+                              padding: EdgeInsets.symmetric(vertical: 16),
+                              child: Text(
+                                'No nearby devices found',
+                                style: TextStyle(fontSize: 13, color: Colors.black26, fontStyle: FontStyle.italic),
                               ),
-                            ],
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
+                            ),
+                          )
+                        else
+                          ...peers.take(5).map((p) {
+                            final isRescue = appState.isPeerRescue(p.name);
+                            final isEmergencySOS = appState.isEmergencySOSPeer(p.name);
+                            final isSOS = isEmergencySOS || appState.isSOSModePeer(p.name) || appState.isSOSPeer(p.name);
+                            if (isEmergencySOS) {
+                              // Emergency SOS — blinking red card
+                              return AnimatedBuilder(
+                                animation: _blinkController,
+                                builder: (ctx, _) {
+                                  final blink = _blinkController.value;
+                                  return Container(
+                                    margin: const EdgeInsets.only(bottom: 8),
+                                    padding: const EdgeInsets.all(10),
+                                    decoration: BoxDecoration(
+                                      color: Colors.red.withOpacity(0.06 + blink * 0.18),
+                                      borderRadius: BorderRadius.circular(10),
+                                      border: Border.all(
+                                        color: Colors.red.withOpacity(0.4 + blink * 0.6),
+                                        width: 1.5 + blink * 1.5,
+                                      ),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.red.withOpacity(blink * 0.3),
+                                          blurRadius: 8 + blink * 8,
+                                          spreadRadius: blink * 2,
+                                        ),
+                                      ],
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Icon(Icons.crisis_alert, color: Color.lerp(Colors.red.shade700, Colors.red.shade300, blink)!, size: 18),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Text.rich(
+                                                TextSpan(
+                                                  children: [
+                                                    TextSpan(
+                                                      text: p.name.isNotEmpty ? p.name : 'Unknown Device',
+                                                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color.lerp(Colors.red.shade800, Colors.red.shade500, blink)!),
+                                                    ),
+                                                    TextSpan(
+                                                      text: '  🚨 ฉุกเฉิน!',
+                                                      style: TextStyle(fontSize: 11, color: Colors.red.shade700, fontWeight: FontWeight.w600),
+                                                    ),
+                                                  ],
+                                                ),
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                              if (p.distance != null) ...[
+                                                const SizedBox(height: 2),
+                                                Text(
+                                                  p.distance! < 1000
+                                                      ? '${p.distance!.toStringAsFixed(0)} m away'
+                                                      : '${(p.distance! / 1000).toStringAsFixed(1)} km away',
+                                                  style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+                                                ),
+                                              ],
+                                            ],
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        GestureDetector(
+                                          onTap: () => Navigator.of(context).push(
+                                            MaterialPageRoute(builder: (_) => EmergencyChatScreen(peer: p)),
+                                          ),
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                            decoration: BoxDecoration(
+                                              color: Colors.red,
+                                              borderRadius: BorderRadius.circular(8),
+                                            ),
+                                            child: const Text('Chat', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600)),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
+                              );
+                            }
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 8),
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: isSOS
+                                    ? Colors.red.withOpacity(0.08)
+                                    : isRescue
+                                        ? Colors.blue.withOpacity(0.08)
+                                        : const Color(0xFFF5F5F5),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(
+                                  color: isSOS
+                                      ? Colors.red.withOpacity(0.3)
+                                      : isRescue
+                                          ? Colors.blue.withOpacity(0.3)
+                                          : Colors.transparent,
+                                ),
+                              ),
+                              child: Row(
                                 children: [
                                   Icon(
-                                    Icons.devices,
-                                    color: Colors.blue,
-                                    size: 24,
+                                    isSOS ? Icons.warning_amber_rounded : isRescue ? Icons.local_hospital : Icons.device_hub,
+                                    color: isSOS ? Colors.red : isRescue ? Colors.blue : Colors.grey,
+                                    size: 16,
                                   ),
                                   const SizedBox(width: 8),
-                                  const Text(
-                                    'อุปกรณ์ที่พบ',
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.bold,
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          p.name.isNotEmpty ? p.name : 'Unknown Device',
+                                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Colors.black87),
+                                        ),
+                                        if (p.distance != null) ...[
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            p.distance! < 1000
+                                                ? '${p.distance!.toStringAsFixed(0)} m away'
+                                                : '${(p.distance! / 1000).toStringAsFixed(1)} km away',
+                                            style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+                                          ),
+                                        ],
+                                      ],
                                     ),
                                   ),
-                                  const Spacer(),
-                                  // 🚑 จำนวนหน่วยกู้ภัย
-                                  if (peers.where((p) => appState.isPeerRescue(p.id)).isNotEmpty) ...[
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 6,
-                                        vertical: 2,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: Colors.blue.withOpacity(0.15),
-                                        borderRadius: BorderRadius.circular(12),
-                                        border: Border.all(
-                                          color: Colors.blue,
-                                          width: 1,
-                                        ),
-                                      ),
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Icon(
-                                            Icons.local_hospital,
-                                            color: Colors.blue,
-                                            size: 12,
-                                          ),
-                                          const SizedBox(width: 3),
-                                          Text(
-                                            '${peers.where((p) => appState.isPeerRescue(p.id)).length}',
-                                            style: const TextStyle(
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.bold,
-                                              color: Colors.blue,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
+                                  const SizedBox(width: 8),
+                                  GestureDetector(
+                                    onTap: () => Navigator.of(context).push(
+                                      MaterialPageRoute(builder: (_) => EmergencyChatScreen(peer: p)),
                                     ),
-                                    const SizedBox(width: 4),
-                                  ],
-                                  // ⚠️ จำนวนโหมด SOS (ยังไม่กดปุ่ม)
-                                  // 🔧 ใช้ p.name แทน p.id เพื่อรองรับ mesh
-                                  if (peers.where((p) => appState.isSOSModePeer(p.name) && !appState.isSOSPeer(p.name)).isNotEmpty) ...[
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 6,
-                                        vertical: 2,
-                                      ),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                                       decoration: BoxDecoration(
-                                        color: Colors.orange.withOpacity(0.15),
-                                        borderRadius: BorderRadius.circular(12),
-                                        border: Border.all(
-                                          color: Colors.orange,
-                                          width: 1,
-                                        ),
+                                        color: isRescue ? Colors.blue : isSOS ? Colors.red : Colors.green,
+                                        borderRadius: BorderRadius.circular(8),
                                       ),
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Icon(
-                                            Icons.emergency,
-                                            color: Colors.orange,
-                                            size: 12,
-                                          ),
-                                          const SizedBox(width: 3),
-                                          Text(
-                                            '${peers.where((p) => appState.isSOSModePeer(p.name) && !appState.isSOSPeer(p.name)).length}',
-                                            style: const TextStyle(
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.bold,
-                                              color: Colors.orange,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
+                                      child: const Text('Chat', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600)),
                                     ),
-                                    const SizedBox(width: 4),
-                                  ],
-                                  // 🚨 จำนวนผู้ขอความช่วยเหลือด่วน (กดปุ่ม SOS)
-                                  // 🔧 ใช้ p.name แทน p.id เพื่อรองรับ mesh
-                                  if (peers.where((p) => appState.isSOSPeer(p.name)).isNotEmpty) ...[
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 6,
-                                        vertical: 2,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: Colors.red.withOpacity(0.15),
-                                        borderRadius: BorderRadius.circular(12),
-                                        border: Border.all(
-                                          color: Colors.red,
-                                          width: 1,
-                                        ),
-                                      ),
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Icon(
-                                            Icons.warning_amber_rounded,
-                                            color: Colors.red,
-                                            size: 12,
-                                          ),
-                                          const SizedBox(width: 3),
-                                          Text(
-                                            '${peers.where((p) => appState.isSOSPeer(p.name)).length}',
-                                            style: const TextStyle(
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.bold,
-                                              color: Colors.red,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
+                                  ),
                                 ],
                               ),
-                              const SizedBox(height: 12),
-                              ...peers.take(3).map((p) {
-                                // � ใช้ p.name แทน p.id เพื่อรองรับ mesh
-                                // �🚑 เช็คว่าเป็นหน่วยกู้ภัยหรือไม่
-                                final isRescue = appState.isPeerRescue(p.name);
-                                // 🚨 เช็คว่าอยู่ในโหมด SOS หรือไม่
-                                final isSOSMode = appState.isSOSModePeer(p.name);
-                                // 🚨 เช็คว่ากดปุ่ม SOS (ขอความช่วยเหลือด่วน) หรือไม่
-                                final isSOSActive = appState.isSOSPeer(p.name);
-                                // รวม: แสดงสีแดงถ้าอยู่ในโหมด SOS หรือกดปุ่ม SOS
-                                final isSOS = isSOSMode || isSOSActive;
-
-                                // 🚨 ถ้ากด SOS ฉุกเฉินด่วน ให้กระพริบ
-                                if (isSOSActive) {
-                                  return AnimatedBuilder(
-                                    animation: _blinkController,
-                                    builder: (context, child) {
-                                      final opacity = _blinkController.value;
-                                      return Container(
-                                        margin: const EdgeInsets.only(bottom: 6),
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 8,
-                                          vertical: 6,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: Colors.red.withOpacity(0.15 + (opacity * 0.2)),
-                                          borderRadius: BorderRadius.circular(8),
-                                          border: Border.all(
-                                            color: Colors.red.withOpacity(0.5 + (opacity * 0.5)),
-                                            width: 2,
-                                          ),
-                                        ),
-                                        child: child,
-                                      );
-                                    },
-                                    child: _buildPeerCardContent(p, isSOS, isSOSActive, isRescue, appState),
-                                  );
-                                }
-
-                                // ไม่กระพริบสำหรับโหมด SOS หรือหน่วยกู้ภัย
-                                return Container(
-                                  margin: const EdgeInsets.only(bottom: 6),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                    vertical: 6,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: isSOS
-                                        ? Colors.red.withOpacity(0.15)
-                                        : isRescue
-                                            ? Colors.blue.withOpacity(0.15)
-                                            : Colors.blue.withOpacity(0.1),
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: isSOS
-                                        ? Border.all(
-                                            color: Colors.red,
-                                            width: 2,
-                                          )
-                                        : isRescue
-                                            ? Border.all(
-                                                color: Colors.blue,
-                                                width: 2,
-                                              )
-                                            : null,
-                                  ),
-                                  child: _buildPeerCardContent(p, isSOS, isSOSActive, isRescue, appState),
-                                );
-                              }),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 24),
+                            );
+                          }),
                       ],
-
-                      // 🚨 + 🚑 โหมด SOS และกู้ภัย - แนวนอน (ซ้ายขวา)
-                      Row(
-                        children: [
-                          // 🚨 โหมด SOS (ซ้าย)
-                          Expanded(
-                            child: AnimatedBuilder(
-                              animation: appState,
-                              builder: (context, _) {
-                                final isSOSActive = appState.isSOSActive;
-                                return GestureDetector(
-                                  onTap: () {
-                                    // ⚡ Real-time: อัปเดต UI ทันทีและทำงาน background
-                                    final willActivate = !isSOSActive;
-                                    
-                                    // แสดงข้อความทันที
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Text(
-                                          willActivate
-                                              ? '🚨 กำลังเปิดโหมด SOS...'
-                                              : '🚨 กำลังปิดโหมด SOS...',
-                                        ),
-                                        backgroundColor: willActivate
-                                            ? Colors.red
-                                            : cs.surfaceContainerHighest,
-                                        duration: const Duration(milliseconds: 800),
-                                      ),
-                                    );
-                                    
-                                    // ทำงานใน background
-                                    appState.toggleSOSMode().then((_) {
-                                      if (context.mounted) {
-                                        ScaffoldMessenger.of(context).showSnackBar(
-                                          SnackBar(
-                                            content: Text(
-                                              willActivate
-                                                  ? '✅ เปิด SOS'
-                                                  : '✅ ปิด SOS',
-                                            ),
-                                            backgroundColor: willActivate
-                                                ? Colors.red.shade700
-                                                : Colors.green,
-                                            duration: const Duration(seconds: 2),
-                                          ),
-                                        );
-                                      }
-                                    });
-                                  },
-                                  child: AspectRatio(
-                                    aspectRatio: 1, // จัตุรัส (1:1)
-                                    child: Container(
-                                      padding: const EdgeInsets.all(16),
-                                      decoration: BoxDecoration(
-                                        color: isSOSActive
-                                            ? const Color(0xFFFF0000) // สีแดงสดเมื่อเปิด
-                                            : cs.surfaceContainer, // สีพื้นฐานเมื่อปิด
-                                        borderRadius: BorderRadius.circular(16),
-                                        border: Border.all(
-                                          color: isSOSActive
-                                              ? Colors.red.shade700
-                                              : cs.outline.withOpacity(0.3),
-                                          width: 2,
-                                        ),
-                                        boxShadow: isSOSActive
-                                            ? [
-                                                BoxShadow(
-                                                  color: Colors.red.withOpacity(0.4),
-                                                  blurRadius: 12,
-                                                  spreadRadius: 2,
-                                                ),
-                                              ]
-                                            : null,
-                                      ),
-                                      child: Column(
-                                        mainAxisAlignment: MainAxisAlignment.center,
-                                        children: [
-                                          Icon(
-                                            Icons.warning_amber_rounded,
-                                            size: 56, // ไอคอนใหญ่ขึ้น
-                                            color: isSOSActive
-                                                ? Colors.white
-                                                : cs.error,
-                                          ),
-                                          const SizedBox(height: 12),
-                                          Text(
-                                            'SOS',
-                                            style: theme.textTheme.titleLarge?.copyWith(
-                                              color: isSOSActive
-                                                  ? Colors.white
-                                                  : cs.onSurface,
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                            textAlign: TextAlign.center,
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            isSOSActive ? 'เปิดใช้งาน' : 'ฉุกเฉิน',
-                                            style: theme.textTheme.bodySmall?.copyWith(
-                                              color: isSOSActive
-                                                  ? Colors.white.withOpacity(0.9)
-                                                  : cs.onSurfaceVariant,
-                                            ),
-                                            textAlign: TextAlign.center,
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
-
-                          const SizedBox(width: 12),
-
-                          // � โหมดกู้ภัย (ขวา)
-                          Expanded(
-                            child: AnimatedBuilder(
-                              animation: appState,
-                              builder: (context, _) {
-                                final isRescueMode = appState.isRescueMode;
-                                return GestureDetector(
-                                  onTap: () {
-                                    // ⚡ Real-time: อัปเดต UI ทันทีและทำงาน background
-                                    final willActivate = !isRescueMode;
-                                    
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Text(
-                                          willActivate
-                                              ? '🚑 กำลังเปิดโหมดหน่วยกู้ภัย...'
-                                              : '🚑 กำลังปิดโหมดหน่วยกู้ภัย...',
-                                        ),
-                                        backgroundColor: willActivate
-                                            ? Colors.blue
-                                            : cs.surfaceContainerHighest,
-                                        duration: const Duration(milliseconds: 800),
-                                      ),
-                                    );
-                                    
-                                    appState.toggleRescueMode().then((_) {
-                                      if (context.mounted) {
-                                        ScaffoldMessenger.of(context).showSnackBar(
-                                          SnackBar(
-                                            content: Text(
-                                              willActivate
-                                                  ? '✅ เปิดโหมดหน่วยกู้ภัย'
-                                                  : '✅ ปิดโหมดหน่วยกู้ภัย',
-                                            ),
-                                            backgroundColor: willActivate
-                                                ? Colors.blue.shade700
-                                                : Colors.green,
-                                            duration: const Duration(seconds: 2),
-                                          ),
-                                        );
-                                      }
-                                    });
-                                  },
-                                  child: AspectRatio(
-                                    aspectRatio: 1, // จัตุรัส (1:1)
-                                    child: Container(
-                                      padding: const EdgeInsets.all(16),
-                                      decoration: BoxDecoration(
-                                        color: isRescueMode
-                                            ? Colors.blue.shade600 // สีน้ำเงินเมื่อเปิด
-                                            : cs.surfaceContainer, // สีพื้นฐานเมื่อปิด
-                                        borderRadius: BorderRadius.circular(16),
-                                        border: Border.all(
-                                          color: isRescueMode
-                                              ? Colors.blue.shade700
-                                              : cs.outline.withOpacity(0.3),
-                                          width: 2,
-                                        ),
-                                        boxShadow: isRescueMode
-                                            ? [
-                                                BoxShadow(
-                                                  color: Colors.blue.withOpacity(0.4),
-                                                  blurRadius: 12,
-                                                  spreadRadius: 2,
-                                                ),
-                                              ]
-                                            : null,
-                                      ),
-                                      child: Column(
-                                        mainAxisAlignment: MainAxisAlignment.center,
-                                        children: [
-                                          Icon(
-                                            Icons.local_hospital,
-                                            size: 56, // ไอคอนใหญ่ขึ้น
-                                            color: isRescueMode
-                                                ? Colors.white
-                                                : cs.tertiary,
-                                          ),
-                                          const SizedBox(height: 12),
-                                          Text(
-                                            'กู้ภัย',
-                                            style: theme.textTheme.titleLarge?.copyWith(
-                                              color: isRescueMode
-                                                  ? Colors.white
-                                                  : cs.onSurface,
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                            textAlign: TextAlign.center,
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            isRescueMode ? 'เปิดใช้งาน' : 'ช่วยเหลือ',
-                                            style: theme.textTheme.bodySmall?.copyWith(
-                                              color: isRescueMode
-                                                  ? Colors.white.withOpacity(0.9)
-                                                  : cs.onSurfaceVariant,
-                                            ),
-                                            textAlign: TextAlign.center,
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
-                        ],
-                      ),
-
-                      const SizedBox(height: 16),
-
-                      // 📡 Protocol Selector - เล็กและกระชับ
-                      AnimatedBuilder(
-                        animation: appState,
-                        builder: (context, _) {
-                          // อ่านค่า protocol ปัจจุบัน
-                          final selected = appState.selectedProtocol;
-                          final protocols = {
-                            'wifi': selected == 'wifi' || selected == 'wifi_direct',
-                            'bluetooth': selected == 'bluetooth' || selected == 'nearby',
-                            'radio': selected == 'radio' || selected == 'mesh',
-                          };
-
-                          return Container(
-                            padding: const EdgeInsets.all(16),
-                            decoration: BoxDecoration(
-                              color: cs.surfaceContainerHighest,
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(
-                                color: cs.outline.withOpacity(0.2),
-                              ),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    Icon(
-                                      Icons.wifi_tethering,
-                                      color: cs.primary,
-                                      size: 20,
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Text(
-                                      'โปรโตคอลค้นหาอุปกรณ์',
-                                      style: theme.textTheme.titleMedium?.copyWith(
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 12),
-                                // Protocol Cards แบบเล็ก
-                                Row(
-                                  children: [
-                                    // WiFi
-                                    Expanded(
-                                      child: _ProtocolCardSmall(
-                                        label: 'WiFi',
-                                        icon: Icons.wifi,
-                                        isSelected: protocols['wifi']!,
-                                        onTap: () => _switchProtocol(context, 'wifi'),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    // Bluetooth
-                                    Expanded(
-                                      child: _ProtocolCardSmall(
-                                        label: 'Bluetooth',
-                                        icon: Icons.bluetooth,
-                                        isSelected: protocols['bluetooth']!,
-                                        onTap: () => _switchProtocol(context, 'bluetooth'),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    // Mesh
-                                    Expanded(
-                                      child: _ProtocolCardSmall(
-                                        label: 'Mesh',
-                                        icon: Icons.radio,
-                                        isSelected: protocols['radio']!,
-                                        onTap: () => _switchProtocol(context, 'radio'),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          );
-                        },
-                      ),
-
-                      const SizedBox(height: 16),
-
-                      // Menu Grid - เหลือ 2 ปุ่ม
-                      GridView.count(
-                        crossAxisCount: 2,
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        crossAxisSpacing: 16,
-                        mainAxisSpacing: 16,
-                        childAspectRatio: 1.1,
-                        children: [
-                          _MenuCard(
-                            title: 'เพื่อน',
-                            subtitle: 'จัดการรายชื่อเพื่อน',
-                            icon: Icons.people,
-                            gradient: const LinearGradient(
-                              colors: [Colors.green, Colors.greenAccent],
-                            ),
-                            badge: friendService.totalUnreadCount > 0
-                                ? '${friendService.totalUnreadCount}'
-                                : null,
-                            onTap: () {
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (_) => const FriendsScreen(),
-                                ),
-                              );
-                            },
-                          ),
-                          _MenuCard(
-                            title: 'โปรไฟล์',
-                            subtitle: 'ข้อมูลส่วนตัว',
-                            icon: Icons.person,
-                            gradient: const LinearGradient(
-                              colors: [Colors.green, Colors.greenAccent],
-                            ),
-                            onTap: () {
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (_) => const ProfileScreen(),
-                                ),
-                              );
-                            },
-                          ),
-                        ],
-                      ),
-
-                      const SizedBox(height: 100),
-                    ],
+                    ),
                   ),
-                ),
+                  const SizedBox(height: 100),
+                ],
               ),
-            ],
+            ),
           ),
         );
       },
     );
   }
 }
-
-// Protocol Card Small Widget (สำหรับหน้าหลัก)
-class _ProtocolCardSmall extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final bool isSelected;
-  final VoidCallback onTap;
-
-  const _ProtocolCardSmall({
-    required this.label,
-    required this.icon,
-    required this.isSelected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeInOutCubic,
-        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-        decoration: BoxDecoration(
-          color: isSelected ? cs.primaryContainer : cs.surfaceContainer,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: isSelected ? cs.primary : cs.outline.withOpacity(0.2),
-            width: isSelected ? 2 : 1,
-          ),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              icon,
-              size: 24,
-              color: isSelected ? cs.primary : cs.onSurfaceVariant,
-            ),
-            const SizedBox(height: 6),
-            Text(
-              label,
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: isSelected ? cs.primary : cs.onSurfaceVariant,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                fontSize: 11,
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// Menu Card Widget
-class _MenuCard extends StatelessWidget {
-  final String title;
-  final String subtitle;
-  final IconData icon;
-  final Gradient gradient;
-  final VoidCallback onTap;
-  final String? badge;
-
-  const _MenuCard({
-    required this.title,
-    required this.subtitle,
-    required this.icon,
-    required this.gradient,
-    required this.onTap,
-    this.badge,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        decoration: BoxDecoration(
-          gradient: gradient,
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.1),
-              blurRadius: 8,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Stack(
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(icon, size: 32, color: Colors.white),
-                  const Spacer(),
-                  Text(
-                    title,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    subtitle,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.white.withOpacity(0.9),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            if (badge != null)
-              Positioned(
-                top: 8,
-                right: 8,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 6,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.red,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text(
-                    badge!,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class NearbyShareScreen extends StatefulWidget {
   const NearbyShareScreen({super.key});
 
@@ -2126,10 +1392,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _error = err;
     });
     if (err == null) {
-      debugPrint('[Main] 🔑 Login สำเร็จ - เรียก onUserLogin()...');
+      Log.d('[Main] 🔑 Login สำเร็จ - เรียก onUserLogin()...');
       // เรียกใช้ onUserLogin เพื่อโหลดข้อมูลของ user
       await appState.onUserLogin();
-      debugPrint('[Main] ✅ onUserLogin() เสร็จสิ้น');
+      Log.d('[Main] ✅ onUserLogin() เสร็จสิ้น');
 
       // ⚠️ ลบบรรทัดนี้ออก เพราะ onUserLogin() ได้ sync แล้ว
       // await friendService.syncWithFirebase();
@@ -2260,48 +1526,45 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
 
+    final offGridState = context.findAncestorStateOfType<_OffGridAppState>();
+    final currentMode = offGridState?._themeMode ?? ThemeMode.system;
+    final isDark = currentMode == ThemeMode.dark ||
+        (currentMode == ThemeMode.system &&
+            MediaQuery.platformBrightnessOf(context) == Brightness.dark);
+
     return Scaffold(
-      body: Center(
-        child: SingleChildScrollView(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                const SizedBox(height: 32),
-                // Header
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      'ตั้งค่า',
-                      style: theme.textTheme.displaySmall,
-                      textAlign: TextAlign.center,
-                    ),
-                    IconButton(
-                      icon: Icon(Icons.bug_report, color: cs.secondary),
-                      onPressed: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => const DebugScreen(),
-                          ),
-                        );
-                      },
-                      tooltip: 'Debug Info',
-                    ),
-                  ],
+      appBar: AppBar(
+        title: const Text('ตั้งค่า', style: TextStyle(fontWeight: FontWeight.bold)),
+        backgroundColor: cs.surface,
+        actions: [
+          IconButton(
+            icon: Icon(isDark ? Icons.light_mode : Icons.dark_mode),
+            tooltip: isDark ? 'สลับเป็นโหมดสว่าง' : 'สลับเป็นโหมดมืด',
+            onPressed: () => offGridState?.setThemeMode(
+              isDark ? ThemeMode.light : ThemeMode.dark,
+            ),
+          ),
+          IconButton(
+            icon: Icon(Icons.bug_report, color: cs.secondary),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const DebugScreen(),
                 ),
-                const SizedBox(height: 8),
-                Text(
-                  'ปรับแต่งการสื่อสารฉุกเฉิน',
-                  style: theme.textTheme.bodyLarge?.copyWith(
-                    color: cs.onSurfaceVariant,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 32),
-                // Account Card
+              );
+            },
+            tooltip: 'Debug Info',
+          ),
+        ],
+      ),
+      body: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Account Card
                 Card(
                   child: Padding(
                     padding: const EdgeInsets.all(20),
@@ -2666,445 +1929,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
 
-                const SizedBox(height: 24),
 
-                // Theme Selection Card
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: cs.primaryContainer,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Icon(
-                                Icons.palette,
-                                color: cs.primary,
-                                size: 28,
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'ธีมสี',
-                                    style: theme.textTheme.titleLarge,
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    'เลือกธีมแสดงผลสำหรับแอป',
-                                    style: theme.textTheme.bodySmall?.copyWith(
-                                      color: cs.onSurfaceVariant,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 20),
-                        // Get current theme mode from ancestor
-                        Builder(
-                          builder: (context) {
-                            // Find the OffGridApp state in the widget tree
-                            final offGridState = context
-                                .findAncestorStateOfType<_OffGridAppState>();
-                            final currentMode =
-                                offGridState?._themeMode ?? ThemeMode.system;
-
-                            return Column(
-                              children: [
-                                // Theme Preview Cards
-                                Row(
-                                  children: [
-                                    // Light Theme Preview
-                                    Expanded(
-                                      child: _ThemePreviewCard(
-                                        label: 'สว่าง',
-                                        icon: Icons.light_mode,
-                                        isSelected:
-                                            currentMode == ThemeMode.light,
-                                        onTap: () => offGridState?.setThemeMode(
-                                          ThemeMode.light,
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    // Dark Theme Preview
-                                    Expanded(
-                                      child: _ThemePreviewCard(
-                                        label: 'มืด',
-                                        icon: Icons.dark_mode,
-                                        isSelected:
-                                            currentMode == ThemeMode.dark,
-                                        onTap: () => offGridState?.setThemeMode(
-                                          ThemeMode.dark,
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    // System Theme Preview
-                                    Expanded(
-                                      child: _ThemePreviewCard(
-                                        label: 'ระบบ',
-                                        icon: Icons.brightness_auto,
-                                        isSelected:
-                                            currentMode == ThemeMode.system,
-                                        onTap: () => offGridState?.setThemeMode(
-                                          ThemeMode.system,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            );
-                          },
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: 24),
-
-                // Profile Card - แสดงเฉพาะตอน login
-                if (user != null)
-                  Card(
-                    child: Container(
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(12),
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [
-                            cs.secondaryContainer,
-                            cs.secondaryContainer.withOpacity(0.7),
-                          ],
-                        ),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.all(20),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.all(8),
-                                  decoration: BoxDecoration(
-                                    color: cs.secondary,
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: Icon(
-                                    Icons.account_circle,
-                                    color: cs.onSecondary,
-                                    size: 28,
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Text(
-                                  'โปรไฟล์ผู้ใช้',
-                                  style: theme.textTheme.titleLarge?.copyWith(
-                                    color: cs.onSecondaryContainer,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 16),
-                            AnimatedBuilder(
-                              animation: friendService,
-                              builder: (context, _) {
-                                final currentUser = friendService.currentUser;
-                                if (currentUser == null) {
-                                  return Center(
-                                    child: CircularProgressIndicator(
-                                      color: cs.secondary,
-                                    ),
-                                  );
-                                }
-
-                                return Column(
-                                  children: [
-                                    // Device Name Setting
-                                    Text(
-                                      'ชื่อเครื่องที่จะแสดงให้คนอื่นเห็น',
-                                      style: theme.textTheme.bodyMedium
-                                          ?.copyWith(
-                                            color: cs.onSecondaryContainer
-                                                .withOpacity(0.8),
-                                          ),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    TextField(
-                                      controller: TextEditingController(
-                                        text: appState.deviceName,
-                                      ),
-                                      style: TextStyle(
-                                        color: cs.onSecondaryContainer,
-                                      ),
-                                      decoration: InputDecoration(
-                                        labelText: 'ชื่อเครื่อง',
-                                        hintText: 'เช่น iPhone ของ John',
-                                        border: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(
-                                            12,
-                                          ),
-                                        ),
-                                      ),
-                                      onChanged: (v) =>
-                                          setState(() => deviceName = v),
-                                      onSubmitted: (v) {
-                                        if (v.isNotEmpty) {
-                                          // บันทึกชื่อเครื่องใน appState
-                                          appState.setDeviceName(v);
-                                          ScaffoldMessenger.of(
-                                            context,
-                                          ).showSnackBar(
-                                            SnackBar(
-                                              content: Text(
-                                                'บันทึกชื่อเครื่อง: $v',
-                                              ),
-                                              backgroundColor: cs.secondary,
-                                            ),
-                                          );
-                                        }
-                                      },
-                                    ),
-                                    const SizedBox(height: 16),
-                                    Row(
-                                      children: [
-                                        CircleAvatar(
-                                          radius: 30,
-                                          backgroundColor: cs.secondary,
-                                          backgroundImage:
-                                              currentUser.avatar != null
-                                              ? NetworkImage(
-                                                  currentUser.avatar!,
-                                                )
-                                              : null,
-                                          child: currentUser.avatar == null
-                                              ? Text(
-                                                  currentUser.name.isNotEmpty
-                                                      ? currentUser.name[0]
-                                                            .toUpperCase()
-                                                      : '?',
-                                                  style: TextStyle(
-                                                    fontSize: 24,
-                                                    fontWeight: FontWeight.bold,
-                                                    color: cs.onSecondary,
-                                                  ),
-                                                )
-                                              : null,
-                                        ),
-                                        const SizedBox(width: 16),
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                                currentUser.name,
-                                                style: theme
-                                                    .textTheme
-                                                    .titleMedium
-                                                    ?.copyWith(
-                                                      color: cs
-                                                          .onSecondaryContainer,
-                                                      fontWeight:
-                                                          FontWeight.bold,
-                                                    ),
-                                              ),
-                                              Row(
-                                                children: [
-                                                  Flexible(
-                                                    child: Text(
-                                                      'ID: ${currentUser.id}',
-                                                      style: theme
-                                                          .textTheme
-                                                          .bodySmall
-                                                          ?.copyWith(
-                                                            color: cs
-                                                                .onSecondaryContainer
-                                                                .withOpacity(
-                                                                  0.7,
-                                                                ),
-                                                          ),
-                                                      overflow:
-                                                          TextOverflow.ellipsis,
-                                                    ),
-                                                  ),
-                                                  IconButton(
-                                                    icon: Icon(
-                                                      Icons.copy,
-                                                      size: 16,
-                                                      color: cs
-                                                          .onSecondaryContainer
-                                                          .withOpacity(0.7),
-                                                    ),
-                                                    padding: EdgeInsets.zero,
-                                                    constraints:
-                                                        const BoxConstraints(),
-                                                    onPressed: () {
-                                                      Clipboard.setData(
-                                                        ClipboardData(
-                                                          text: currentUser.id,
-                                                        ),
-                                                      );
-                                                      ScaffoldMessenger.of(
-                                                        context,
-                                                      ).showSnackBar(
-                                                        SnackBar(
-                                                          content: const Text(
-                                                            'คัดลอก User ID แล้ว!',
-                                                          ),
-                                                          backgroundColor:
-                                                              cs.secondary,
-                                                          duration:
-                                                              const Duration(
-                                                                seconds: 1,
-                                                              ),
-                                                        ),
-                                                      );
-                                                    },
-                                                    tooltip: 'คัดลอก User ID',
-                                                  ),
-                                                ],
-                                              ),
-                                              if (currentUser.bio != null &&
-                                                  currentUser.bio!.isNotEmpty)
-                                                Text(
-                                                  currentUser.bio!,
-                                                  style: theme
-                                                      .textTheme
-                                                      .bodyMedium
-                                                      ?.copyWith(
-                                                        color: cs
-                                                            .onSecondaryContainer
-                                                            .withOpacity(0.8),
-                                                      ),
-                                                  maxLines: 2,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                ),
-                                            ],
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 16),
-                                    SizedBox(
-                                      width: double.infinity,
-                                      child: FilledButton.icon(
-                                        style: FilledButton.styleFrom(
-                                          backgroundColor: cs.secondary,
-                                          shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(
-                                              12,
-                                            ),
-                                          ),
-                                        ),
-                                        onPressed: () {
-                                          Navigator.push(
-                                            context,
-                                            MaterialPageRoute(
-                                              builder: (context) =>
-                                                  const ProfileScreen(),
-                                            ),
-                                          );
-                                        },
-                                        icon: const Icon(Icons.edit),
-                                        label: const Text('แก้ไขโปรไฟล์'),
-                                      ),
-                                    ),
-                                  ],
-                                );
-                              },
-                            ),
-                          ],
-                        ),
-                      ),
-                    ), // ปิด Container
-                  ), // ปิด Card ของ Profile (if user != null)
               ],
             ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-// Theme Preview Card Widget
-class _ThemePreviewCard extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final bool isSelected;
-  final VoidCallback onTap;
-
-  const _ThemePreviewCard({
-    required this.label,
-    required this.icon,
-    required this.isSelected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeInOutCubic,
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: isSelected ? cs.primaryContainer : cs.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: isSelected ? cs.primary : cs.outline.withOpacity(0.2),
-            width: isSelected ? 2 : 1,
-          ),
-          boxShadow: isSelected
-              ? [
-                  BoxShadow(
-                    color: cs.primary.withOpacity(0.3),
-                    blurRadius: 8,
-                    spreadRadius: 1,
-                  ),
-                ]
-              : [],
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Theme icon (simple, no background)
-            Icon(
-              icon,
-              size: 32,
-              color: isSelected ? cs.primary : cs.onSurfaceVariant,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              label,
-              style: theme.textTheme.labelLarge?.copyWith(
-                color: isSelected ? cs.primary : cs.onSurfaceVariant,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

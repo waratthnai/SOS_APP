@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:convert'; // เพิ่มสำหรับ utf8 encoding/decoding
 import 'dart:typed_data'; // เพิ่มการนำเข้า Uint8List
 import 'dart:io'; // เพิ่มสำหรับ File operations
@@ -7,6 +7,7 @@ import 'package:nearby_connections/nearby_connections.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart'; // เพิ่มสำหรับหา app directory
 import 'transport.dart';
+import 'package:offgrid_sos/core/logger.dart';
 
 /// ใช้กลยุทธ์ CLUSTER: ยืดหยุ่น เชื่อมต่อได้หลายเครื่อง
 const _strategy = Strategy.P2P_CLUSTER;
@@ -58,7 +59,7 @@ class NearbyTransport implements Transport {
       for (final entry in _lostPeers.entries) {
         final downDuration = now.difference(entry.value);
         if (downDuration.inHours >= 1) {
-          print('🧹 Removing lost peer ${entry.key} - down for ${downDuration.inHours} hours');
+          Log.d('🧹 Removing lost peer ${entry.key} - down for ${downDuration.inHours} hours');
           toRemove.add(entry.key);
         }
       }
@@ -76,6 +77,7 @@ class NearbyTransport implements Transport {
   }
 
   // Stream สำหรับไฟล์ที่ได้รับ
+  @override
   Stream<ReceivedFile> get onFileReceived => _fileCtrl.stream;
 
   // เพิ่ม method สำหรับอัปเดตชื่อเครื่อง
@@ -129,29 +131,29 @@ class NearbyTransport implements Transport {
     try {
       hasNearbyWifiDevices = await _permissionChannel.invokeMethod('hasNearbyWifiPermission') ?? false;
       if (!hasNearbyWifiDevices) {
-        print('📶 Requesting NEARBY_WIFI_DEVICES permission...');
+        Log.d('📶 Requesting NEARBY_WIFI_DEVICES permission...');
         await _permissionChannel.invokeMethod('requestNearbyWifiPermission');
         // Check again after request
         hasNearbyWifiDevices = await _permissionChannel.invokeMethod('hasNearbyWifiPermission') ?? false;
       }
     } catch (e) {
-      print('⚠️ NEARBY_WIFI_DEVICES permission check failed: $e');
+      Log.d('⚠️ NEARBY_WIFI_DEVICES permission check failed: $e');
       // Continue anyway, might work with location permission
     }
     
-    print('🔍 Permissions check:');
-    print('📍 Location: $hasLocation');
-    print('📶 Bluetooth: $hasBluetooth');
-    print('📢 Bluetooth Advertise: $hasBluetoothAdvertise');
-    print('🔗 Bluetooth Connect: $hasBluetoothConnect');
-    print('🔎 Bluetooth Scan: $hasBluetoothScan');
-    print('📶 Nearby WiFi Devices: $hasNearbyWifiDevices');
+    Log.d('🔍 Permissions check:');
+    Log.d('📍 Location: $hasLocation');
+    Log.d('📶 Bluetooth: $hasBluetooth');
+    Log.d('📢 Bluetooth Advertise: $hasBluetoothAdvertise');
+    Log.d('🔗 Bluetooth Connect: $hasBluetoothConnect');
+    Log.d('🔎 Bluetooth Scan: $hasBluetoothScan');
+    Log.d('📶 Nearby WiFi Devices: $hasNearbyWifiDevices');
     
     // Require at least location and bluetooth permissions
     bool hasBasicPerms = hasLocation && hasBluetooth && hasBluetoothAdvertise && hasBluetoothConnect && hasBluetoothScan;
     
     if (!hasBasicPerms) {
-      print('❌ Missing basic permissions for Nearby Connections');
+      Log.d('❌ Missing basic permissions for Nearby Connections');
       return false;
     }
     
@@ -161,13 +163,13 @@ class NearbyTransport implements Transport {
   void _emitPeers() {
     // ป้องกันการ emit หลังจาก dispose
     if (_peersCtrl.isClosed) {
-      print('⚠️ _emitPeers() skipped - controller is closed');
+      Log.d('⚠️ _emitPeers() skipped - controller is closed');
       return;
     }
     
     final list = <Peer>[];
-    print('🔍 _emitPeers() - My device name: "$deviceName"');
-    print('   Total found: ${_found.length}, Total connected: ${_connected.length}');
+    Log.d('🔍 _emitPeers() - My device name: "$deviceName"');
+    Log.d('   Total found: ${_found.length}, Total connected: ${_connected.length}');
     
     // peers = รวมเฉพาะที่เชื่อมต่อสำเร็จแล้ว (มี ConnectionInfo)
     for (final id in _connected.keys) {
@@ -176,11 +178,11 @@ class NearbyTransport implements Transport {
       
       final peerName = info.endpointName;
       
-      print('  Connected peer: id=$id, name="$peerName"');
+      Log.d('  Connected peer: id=$id, name="$peerName"');
       
       // กรองเครื่องตัวเองออก
       if (peerName == deviceName || peerName.isEmpty) {
-        print('  ⚠️ Filtered out: own device or empty name: "$peerName" ($id)');
+        Log.d('  ⚠️ Filtered out: own device or empty name: "$peerName" ($id)');
         continue;
       }
       
@@ -191,7 +193,7 @@ class NearbyTransport implements Transport {
       ));
     }
     
-    print('📱 Emitting ${list.length} connected peers');
+    Log.d('📱 Emitting ${list.length} connected peers');
     // ✅ เช็คว่า stream ยังเปิดอยู่ก่อน emit
     if (!_peersCtrl.isClosed) {
       _peersCtrl.add(list);
@@ -202,7 +204,7 @@ class NearbyTransport implements Transport {
   void _doRequestConnection(String id, {int retryCount = 0}) {
     // ป้องกัน retry มากเกินไป
     if (retryCount > 3) {
-      print('❌ Max retry attempts reached for $id');
+      Log.d('❌ Max retry attempts reached for $id');
       _pendingConnections.remove(id);
       _found.remove(id);
       _emitPeers();
@@ -213,27 +215,27 @@ class NearbyTransport implements Transport {
       deviceName,
       id,
       onConnectionInitiated: (rid, info) async {
-        print('🤝 Connection initiated (DISCOVERY side): $rid, name=${info.endpointName}');
+        Log.d('🤝 Connection initiated (DISCOVERY side): $rid, name=${info.endpointName}');
         
         // ⚠️ ป้องกันการเชื่อมต่อกับเครื่องตัวเอง
         if (info.endpointName == deviceName) {
-          print('⛔ Rejected: Cannot connect to self (${info.endpointName})');
+          Log.d('⛔ Rejected: Cannot connect to self (${info.endpointName})');
           _pendingConnections.remove(rid);
           try {
             await Nearby().rejectConnection(rid);
           } catch (e) {
-            print('⚠️ Failed to reject self-connection: $e');
+            Log.d('⚠️ Failed to reject self-connection: $e');
           }
           return;
         }
         
         // บันทึก connection info ทันที
         _connected[rid] = info;
-        print('📝 Saved connection info for ${info.endpointName} ($rid)');
+        Log.d('📝 Saved connection info for ${info.endpointName} ($rid)');
         
         // ⚡ บันทึกเป็น persistent peer (เพื่อ auto-reconnect ในอนาคต)
         _persistentPeers[rid] = info;
-        print('💾 Added to persistent peers list');
+        Log.d('💾 Added to persistent peers list');
         
         // ⚡ ลด delay จาก 200ms → 100ms เพื่อความเร็ว
         await Future.delayed(const Duration(milliseconds: 100));
@@ -242,12 +244,12 @@ class NearbyTransport implements Transport {
           await Nearby().acceptConnection(
             rid,
             onPayLoadRecieved: (eid, payload) {
-              print('📨 [Discovery] Received payload from: $eid (type: ${payload.type})');
-              print('   Payload size: ${payload.bytes?.length ?? 0} bytes');
+              Log.d('📨 [Discovery] Received payload from: $eid (type: ${payload.type})');
+              Log.d('   Payload size: ${payload.bytes?.length ?? 0} bytes');
               
               if (payload.type == PayloadType.BYTES) {
                 final rawBytes = payload.bytes!;
-                print('📦 BYTES payload received, size: ${rawBytes.length}');
+                Log.d('📦 BYTES payload received, size: ${rawBytes.length}');
                 
                 // ตรวจสอบว่าเป็นรูปภาพ, วิดีโอ หรือข้อความ
                 const imageMarker = 'IMAGE:';
@@ -263,7 +265,7 @@ class NearbyTransport implements Transport {
                     // นี่คือไฟล์ (รูปหรือวิดีโอ)!
                     final isVideo = headerStr == videoMarker;
                     final fileType = isVideo ? 'วิดีโอ' : 'รูปภาพ';
-                    print('📷 ได้รับ$fileType จาก: $eid');
+                    Log.d('📷 ได้รับ$fileType จาก: $eid');
                     
                     try {
                       // Parse: [marker][length][name][data]
@@ -278,7 +280,7 @@ class NearbyTransport implements Transport {
                       
                       final fileBytes = rawBytes.sublist(offset);
                       
-                      print('📊 ชื่อไฟล์: $fileName, ขนาด: ${fileBytes.length} bytes');
+                      Log.d('📊 ชื่อไฟล์: $fileName, ขนาด: ${fileBytes.length} bytes');
                       
                       // บันทึกไฟล์ลง app directory
                       if (isVideo) {
@@ -287,7 +289,7 @@ class NearbyTransport implements Transport {
                         _saveReceivedImage(fileBytes, fileName, eid);
                       }
                     } catch (e) {
-                      print('❌ Parse ไฟล์ล้มเหลว: $e');
+                      Log.d('❌ Parse ไฟล์ล้มเหลว: $e');
                     }
                     return;
                   }
@@ -304,7 +306,7 @@ class NearbyTransport implements Transport {
                     final parts = text.substring(metadataMarker.length).split(':');
                     if (parts.length >= 2) {
                       final fileType = parts[0]; // 'VIDEO' or 'IMAGE'
-                      print('📋 ได้รับ metadata: $fileType จาก $eid');
+                      Log.d('📋 ได้รับ metadata: $fileType จาก $eid');
                       _fileMetadata[eid] = fileType;
                     }
                     return;
@@ -312,7 +314,7 @@ class NearbyTransport implements Transport {
                   
                   // ถ้าไม่ใช่ metadata = เป็นข้อความปกติ
                   if (!text.startsWith('FILE_METADATA:')) {
-                    print('📩 Message content: ${text.length > 50 ? text.substring(0, 50) + "..." : text}');
+                    Log.d('📩 Message content: ${text.length > 50 ? text.substring(0, 50) + "..." : text}');
                     
                     // ป้องกันการ add หลัง dispose
                     if (!_msgCtrl.isClosed) {
@@ -322,21 +324,21 @@ class NearbyTransport implements Transport {
                         time: DateTime.now(),
                       ));
                     } else {
-                      print('⚠️ Message dropped - controller is closed');
+                      Log.d('⚠️ Message dropped - controller is closed');
                     }
                   } else {
-                    print('⚠️ Metadata message ไม่ควรมาถึงจุดนี้: $text');
+                    Log.d('⚠️ Metadata message ไม่ควรมาถึงจุดนี้: $text');
                   }
                 } catch (e) {
                   // ถ้า decode ไม่ได้ = เป็น binary data ที่ไม่รู้จัก
-                  print('⚠️ ไม่สามารถ decode payload เป็น text: $e');
-                  print('   ขนาด: ${rawBytes.length} bytes, header: ${rawBytes.take(20).toList()}');
+                  Log.d('⚠️ ไม่สามารถ decode payload เป็น text: $e');
+                  Log.d('   ขนาด: ${rawBytes.length} bytes, header: ${rawBytes.take(20).toList()}');
                 }
               } else if (payload.type == PayloadType.FILE) {
-                print('📁 File payload received: ${payload.id}, uri: ${payload.uri}');
+                Log.d('📁 File payload received: ${payload.id}, uri: ${payload.uri}');
                 // เก็บ metadata ที่ได้รับไว้ก่อนหน้า
                 final fileType = _fileMetadata[eid];
-                print('📋 File type from metadata: $fileType');
+                Log.d('📋 File type from metadata: $fileType');
                 _pendingFiles[payload.id] = _PendingFile(eid, payload.uri, fileType: fileType);
               }
             },
@@ -344,11 +346,11 @@ class NearbyTransport implements Transport {
               if (status.status == PayloadStatus.SUCCESS) {
                 final fileInfo = _pendingFiles[status.id];
                 if (fileInfo != null && fileInfo.uri != null) {
-                  print('✅ File transfer complete: ${fileInfo.uri}');
+                  Log.d('✅ File transfer complete: ${fileInfo.uri}');
                   
                   // 🆕 Copy ไฟล์ไปเก็บถาวร (ส่ง fileType จาก metadata)
                   _copyFileToPermanentStorage(fileInfo.uri!, fileType: fileInfo.fileType).then((permanentPath) {
-                    print('📁 ไฟล์ถูกเก็บที่: $permanentPath');
+                    Log.d('📁 ไฟล์ถูกเก็บที่: $permanentPath');
                     _fileCtrl.add(ReceivedFile(
                       fromPeerId: fileInfo.fromPeerId,
                       filePath: permanentPath, // ใช้ path ที่ copy แล้ว
@@ -357,7 +359,7 @@ class NearbyTransport implements Transport {
                     // ล้าง metadata หลังใช้แล้ว
                     _fileMetadata.remove(fileInfo.fromPeerId);
                   }).catchError((error) {
-                    print('❌ Copy ไฟล์ล้มเหลว: $error');
+                    Log.d('❌ Copy ไฟล์ล้มเหลว: $error');
                     // ถ้า copy ไม่ได้ ใช้ URI เดิม
                     _fileCtrl.add(ReceivedFile(
                       fromPeerId: fileInfo.fromPeerId,
@@ -371,36 +373,36 @@ class NearbyTransport implements Transport {
               }
             },
           );
-          print('✅ [Discovery] Accepted connection: ${info.endpointName} ($rid)');
+          Log.d('✅ [Discovery] Accepted connection: ${info.endpointName} ($rid)');
         } catch (e) {
-          print('⚠️ [Discovery] Accept connection error (continuing): $e');
+          Log.d('⚠️ [Discovery] Accept connection error (continuing): $e');
           // ไม่ throw error - รอดูผลจาก onConnectionResult
         }
       },
       onConnectionResult: (rid, status) {
-        print('🔗 Connection result (DISCOVERY): $rid -> $status');
+        Log.d('🔗 Connection result (DISCOVERY): $rid -> $status');
         
         // ลบออกจาก pending list
         _pendingConnections.remove(rid);
         
         if (status == Status.CONNECTED) {
-          print('✅ Successfully connected (discovery): $rid');
+          Log.d('✅ Successfully connected (discovery): $rid');
           _emitPeers();
         } else {
-          print('❌ Connection failed (discovery): $rid -> $status');
+          Log.d('❌ Connection failed (discovery): $rid -> $status');
           _connected.remove(rid);
           _found.remove(rid);
           _emitPeers();
         }
       },
       onDisconnected: (rid) {
-        print('❌ Disconnected (discovery): $rid');
+        Log.d('❌ Disconnected (discovery): $rid');
         _pendingConnections.remove(rid);
         
         // ⚡ ถ้าเป็น persistent peer → เก็บไว้ (ไม่ลบ) แค่ mark ว่า disconnected
         final wasPersistent = _persistentPeers.containsKey(rid);
         if (wasPersistent) {
-          print('💾 Persistent peer disconnected - will keep for auto-reconnect');
+          Log.d('💾 Persistent peer disconnected - will keep for auto-reconnect');
           _lostPeers[rid] = DateTime.now();
           // ไม่ลบจาก _persistentPeers
         }
@@ -409,14 +411,14 @@ class NearbyTransport implements Transport {
         
         // ⚡ ถ้าเป็น cleanup disconnect (เพื่อ retry) → ไม่ลบจาก _found
         if (_cleanupDisconnects.contains(rid)) {
-          print('   This is a cleanup disconnect - keeping endpoint in _found for retry');
+          Log.d('   This is a cleanup disconnect - keeping endpoint in _found for retry');
           _cleanupDisconnects.remove(rid);
         } else if (!wasPersistent) {
           // disconnect จริงๆ และไม่ใช่ persistent → ลบออกจาก _found
           _found.remove(rid);
         } else {
           // persistent peer → เก็บไว้ใน _found เพื่อแสดงใน UI (แต่ status = disconnected)
-          print('   Keeping persistent peer in _found for display');
+          Log.d('   Keeping persistent peer in _found for display');
         }
         
         _emitPeers();
@@ -424,8 +426,8 @@ class NearbyTransport implements Transport {
     ).catchError((error) {
       // ⚡ ตรวจสอบว่าเชื่อมต่ออยู่แล้วหรือไม่ (8003)
       if (error.toString().contains('8003') || error.toString().contains('STATUS_ALREADY_CONNECTED')) {
-        print('⚠️ STATUS_ALREADY_CONNECTED detected for $id');
-        print('   This means Nearby API has stale connection - disconnecting first...');
+        Log.d('⚠️ STATUS_ALREADY_CONNECTED detected for $id');
+        Log.d('   This means Nearby API has stale connection - disconnecting first...');
         _pendingConnections.remove(id);
         
         // เพิ่มลง cleanup set ก่อน disconnect (เพื่อไม่ให้ onDisconnected ลบจาก _found)
@@ -433,26 +435,26 @@ class NearbyTransport implements Transport {
         
         // Disconnect connection เก่าที่ค้างอยู่
         Nearby().disconnectFromEndpoint(id).then((_) {
-          print('✅ Disconnected stale connection for $id');
+          Log.d('✅ Disconnected stale connection for $id');
           // รอให้ API cleanup เสร็จ
           return Future.delayed(const Duration(milliseconds: 500));
         }).then((_) {
           // Retry connection ใหม่
           if (_found.contains(id) && retryCount < 2) {
-            print('🔄 Retrying connection to $id after cleanup...');
+            Log.d('🔄 Retrying connection to $id after cleanup...');
             _pendingConnections.add(id);
             _doRequestConnection(id, retryCount: retryCount + 1);
           } else {
-            print('⚠️ Max retries reached or endpoint lost for $id');
+            Log.d('⚠️ Max retries reached or endpoint lost for $id');
             _cleanupDisconnects.remove(id); // ลบออกจาก cleanup set
             _emitPeers();
           }
         }).catchError((disconnectError) {
-          print('⚠️ Disconnect error for $id: $disconnectError');
+          Log.d('⚠️ Disconnect error for $id: $disconnectError');
           // ลองใหม่อีกครั้งแม้ disconnect ไม่สำเร็จ
           Future.delayed(const Duration(milliseconds: 500), () {
             if (_found.contains(id) && retryCount < 2) {
-              print('🔄 Retrying anyway after disconnect error...');
+              Log.d('🔄 Retrying anyway after disconnect error...');
               _pendingConnections.add(id);
               _doRequestConnection(id, retryCount: retryCount + 1);
             } else {
@@ -465,20 +467,20 @@ class NearbyTransport implements Transport {
       
       // ตรวจสอบว่าเป็น STATUS_RADIO_ERROR (8007) หรือไม่
       if (error.toString().contains('8007') || error.toString().contains('STATUS_RADIO_ERROR')) {
-        print('📡 Radio error detected for $id - waiting before retry (attempt ${retryCount + 1}/3)');
+        Log.d('📡 Radio error detected for $id - waiting before retry (attempt ${retryCount + 1}/3)');
         _pendingConnections.remove(id); // ยกเลิก pending status
         
         // รอ 2 วินาทีแล้วลองใหม่
         Future.delayed(const Duration(seconds: 2), () {
           if (_found.contains(id) && !_pendingConnections.contains(id)) {
-            print('🔄 Retrying connection to $id...');
+            Log.d('🔄 Retrying connection to $id...');
             _pendingConnections.add(id);
             _doRequestConnection(id, retryCount: retryCount + 1);
           }
         });
       } else {
         // Error อื่นๆ ที่ไม่ใช่ radio error
-        print('❌ requestConnection error for $id: $error');
+        Log.d('❌ requestConnection error for $id: $error');
         _pendingConnections.remove(id);
         _found.remove(id);
         _emitPeers();
@@ -489,26 +491,26 @@ class NearbyTransport implements Transport {
 
   @override
   Future<void> startDiscovery() async {
-    print('🚀 [NearbyTransport] startDiscovery() called');
-    print('   Device name: "$deviceName"');
-    print('   Current state: $_state');
+    Log.d('🚀 [NearbyTransport] startDiscovery() called');
+    Log.d('   Device name: "$deviceName"');
+    Log.d('   Current state: $_state');
     
     // ⚡ ถ้ากำลัง scan อยู่แล้ว ไม่ต้องทำอะไร
     if (_state == DiscoveryState.scanning && _isAdvertising && _isDiscovering) {
-      print('✅ Already scanning and active, skip restart');
+      Log.d('✅ Already scanning and active, skip restart');
       return;
     }
     
     // Stop any existing sessions first
     if (_isAdvertising || _isDiscovering) {
-      print('🔄 Stopping existing sessions...');
+      Log.d('🔄 Stopping existing sessions...');
       try {
         await stopDiscovery();
         // ⚡ ลด delay ลงเหลือ 1 วินาที (จาก 3 วินาที)
-        print('⏳ Waiting for radio to stabilize...');
+        Log.d('⏳ Waiting for radio to stabilize...');
         await Future.delayed(const Duration(milliseconds: 1000));
       } catch (e) {
-        print('⚠️ Error stopping previous session: $e');
+        Log.d('⚠️ Error stopping previous session: $e');
         // Reset states manually
         _isAdvertising = false;
         _isDiscovering = false;
@@ -520,7 +522,7 @@ class NearbyTransport implements Transport {
     
     final ok = await _ensurePerms();
     if (!ok) {
-      print('❌ Permissions not granted for Nearby Connections');
+      Log.d('❌ Permissions not granted for Nearby Connections');
       throw Exception('Permissions not granted for Nearby Connections. Please grant all Bluetooth and Location permissions.');
     }
 
@@ -530,25 +532,25 @@ class NearbyTransport implements Transport {
     try {
       // เริ่มทั้ง advertise (ให้คนอื่นเห็นเรา) และ discovery (ค้นหาเอง)
       // 1) โฆษณาอุปกรณ์เรา
-      print('📢 Starting advertising...');
-      print('   Device name: "$deviceName"');
-      print('   Service ID: $_serviceId');
-      print('   Strategy: $_strategy');
+      Log.d('📢 Starting advertising...');
+      Log.d('   Device name: "$deviceName"');
+      Log.d('   Service ID: $_serviceId');
+      Log.d('   Strategy: $_strategy');
       
       try {
         await Nearby().startAdvertising(
           deviceName,
           _strategy,
           onConnectionInitiated: (id, info) async {
-            print('🤝 Connection initiated (ADVERTISING side) from: ${info.endpointName} (id: $id)');
+            Log.d('🤝 Connection initiated (ADVERTISING side) from: ${info.endpointName} (id: $id)');
             
             // ⚠️ ป้องกันการเชื่อมต่อกับเครื่องตัวเอง
             if (info.endpointName == deviceName) {
-              print('⛔ Rejected: Cannot connect to self (${info.endpointName})');
+              Log.d('⛔ Rejected: Cannot connect to self (${info.endpointName})');
               try {
                 await Nearby().rejectConnection(id);
               } catch (e) {
-                print('⚠️ Failed to reject self-connection: $e');
+                Log.d('⚠️ Failed to reject self-connection: $e');
               }
               return;
             }
@@ -558,19 +560,19 @@ class NearbyTransport implements Transport {
             
             // ⚡ บันทึกเป็น persistent peer (เพื่อ auto-reconnect ในอนาคต)
             _persistentPeers[id] = info;
-            print('💾 Added to persistent peers list (advertising side)');
+            Log.d('💾 Added to persistent peers list (advertising side)');
             
             // รับการเชื่อมต่อ (ฝั่ง ADVERTISING เป็น responder)
             try {
               await Nearby().acceptConnection(
                 id,
                 onPayLoadRecieved: (eid, payload) {
-                  print('📨 [Advertising] Received payload from: $eid (type: ${payload.type})');
-                  print('   Payload size: ${payload.bytes?.length ?? 0} bytes');
+                  Log.d('📨 [Advertising] Received payload from: $eid (type: ${payload.type})');
+                  Log.d('   Payload size: ${payload.bytes?.length ?? 0} bytes');
                   
                   if (payload.type == PayloadType.BYTES) {
                     final rawBytes = payload.bytes!;
-                    print('📦 BYTES payload received, size: ${rawBytes.length}');
+                    Log.d('📦 BYTES payload received, size: ${rawBytes.length}');
                     
                     // ตรวจสอบว่าเป็นรูปภาพ, วิดีโอ หรือข้อความ
                     const imageMarker = 'IMAGE:';
@@ -586,7 +588,7 @@ class NearbyTransport implements Transport {
                         // นี่คือไฟล์ (รูปหรือวิดีโอ)!
                         final isVideo = headerStr == videoMarker;
                         final fileType = isVideo ? 'วิดีโอ' : 'รูปภาพ';
-                        print('📷 ได้รับ$fileType จาก: $eid');
+                        Log.d('📷 ได้รับ$fileType จาก: $eid');
                         
                         try {
                           // Parse: [marker][length][name][data]
@@ -601,7 +603,7 @@ class NearbyTransport implements Transport {
                           
                           final fileBytes = rawBytes.sublist(offset);
                           
-                          print('📊 ชื่อไฟล์: $fileName, ขนาด: ${fileBytes.length} bytes');
+                          Log.d('📊 ชื่อไฟล์: $fileName, ขนาด: ${fileBytes.length} bytes');
                           
                           // บันทึกไฟล์ลง app directory
                           if (isVideo) {
@@ -610,7 +612,7 @@ class NearbyTransport implements Transport {
                             _saveReceivedImage(fileBytes, fileName, eid);
                           }
                         } catch (e) {
-                          print('❌ Parse ไฟล์ล้มเหลว: $e');
+                          Log.d('❌ Parse ไฟล์ล้มเหลว: $e');
                         }
                         return;
                       }
@@ -627,7 +629,7 @@ class NearbyTransport implements Transport {
                         final parts = text.substring(metadataMarker.length).split(':');
                         if (parts.length >= 2) {
                           final fileType = parts[0]; // 'VIDEO' or 'IMAGE'
-                          print('📋 ได้รับ metadata: $fileType จาก $eid');
+                          Log.d('📋 ได้รับ metadata: $fileType จาก $eid');
                           _fileMetadata[eid] = fileType;
                         }
                         return;
@@ -635,7 +637,7 @@ class NearbyTransport implements Transport {
                       
                       // ถ้าไม่ใช่ metadata = เป็นข้อความปกติ
                       if (!text.startsWith('FILE_METADATA:')) {
-                        print('📩 Message content: ${text.length > 50 ? text.substring(0, 50) + "..." : text}');
+                        Log.d('📩 Message content: ${text.length > 50 ? text.substring(0, 50) + "..." : text}');
                         
                         // ป้องกันการ add หลัง dispose
                         if (!_msgCtrl.isClosed) {
@@ -645,21 +647,21 @@ class NearbyTransport implements Transport {
                             time: DateTime.now(),
                           ));
                         } else {
-                          print('⚠️ Message dropped - controller is closed');
+                          Log.d('⚠️ Message dropped - controller is closed');
                         }
                       } else {
-                        print('⚠️ Metadata message ไม่ควรมาถึงจุดนี้: $text');
+                        Log.d('⚠️ Metadata message ไม่ควรมาถึงจุดนี้: $text');
                       }
                     } catch (e) {
                       // ถ้า decode ไม่ได้ = เป็น binary data ที่ไม่รู้จัก
-                      print('⚠️ ไม่สามารถ decode payload เป็น text: $e');
-                      print('   ขนาด: ${rawBytes.length} bytes, header: ${rawBytes.take(20).toList()}');
+                      Log.d('⚠️ ไม่สามารถ decode payload เป็น text: $e');
+                      Log.d('   ขนาด: ${rawBytes.length} bytes, header: ${rawBytes.take(20).toList()}');
                     }
                   } else if (payload.type == PayloadType.FILE) {
-                    print('📁 File payload received: ${payload.id}, uri: ${payload.uri}');
+                    Log.d('📁 File payload received: ${payload.id}, uri: ${payload.uri}');
                     // เก็บ metadata ที่ได้รับไว้ก่อนหน้า
                     final fileType = _fileMetadata[eid];
-                    print('📋 File type from metadata: $fileType');
+                    Log.d('📋 File type from metadata: $fileType');
                     _pendingFiles[payload.id] = _PendingFile(eid, payload.uri, fileType: fileType);
                   }
                 },
@@ -667,11 +669,11 @@ class NearbyTransport implements Transport {
                   if (status.status == PayloadStatus.SUCCESS) {
                     final fileInfo = _pendingFiles[status.id];
                     if (fileInfo != null && fileInfo.uri != null) {
-                      print('✅ File transfer complete: ${fileInfo.uri}');
+                      Log.d('✅ File transfer complete: ${fileInfo.uri}');
                       
                       // 🆕 Copy ไฟล์ไปเก็บถาวร (ส่ง fileType จาก metadata)
                       _copyFileToPermanentStorage(fileInfo.uri!, fileType: fileInfo.fileType).then((permanentPath) {
-                        print('📁 ไฟล์ถูกเก็บที่: $permanentPath');
+                        Log.d('📁 ไฟล์ถูกเก็บที่: $permanentPath');
                         _fileCtrl.add(ReceivedFile(
                           fromPeerId: fileInfo.fromPeerId,
                           filePath: permanentPath, // ใช้ path ที่ copy แล้ว
@@ -680,7 +682,7 @@ class NearbyTransport implements Transport {
                         // ล้าง metadata หลังใช้แล้ว
                         _fileMetadata.remove(fileInfo.fromPeerId);
                       }).catchError((error) {
-                        print('❌ Copy ไฟล์ล้มเหลว: $error');
+                        Log.d('❌ Copy ไฟล์ล้มเหลว: $error');
                         // ถ้า copy ไม่ได้ ใช้ URI เดิม
                         _fileCtrl.add(ReceivedFile(
                           fromPeerId: fileInfo.fromPeerId,
@@ -694,31 +696,31 @@ class NearbyTransport implements Transport {
                   }
                 },
               );
-              print('✅ Accept connection (advertising side): ${info.endpointName} ($id)');
+              Log.d('✅ Accept connection (advertising side): ${info.endpointName} ($id)');
             } catch (e) {
-              print('❌ Failed to accept connection (advertising): $e');
+              Log.d('❌ Failed to accept connection (advertising): $e');
               _connected.remove(id);
             }
           },
           onConnectionResult: (id, status) {
-            print('🔗 Connection result (ADVERTISING): $id -> $status');
+            Log.d('🔗 Connection result (ADVERTISING): $id -> $status');
             if (status == Status.CONNECTED) {
-              print('✅ Successfully connected (advertising): $id');
+              Log.d('✅ Successfully connected (advertising): $id');
               _emitPeers();
             } else {
-              print('❌ Connection failed (advertising): $id -> $status');
+              Log.d('❌ Connection failed (advertising): $id -> $status');
               _connected.remove(id);
               _found.remove(id);
               _emitPeers();
             }
           },
           onDisconnected: (id) {
-            print('❌ Disconnected (advertising): $id');
+            Log.d('❌ Disconnected (advertising): $id');
             
             // ⚡ ถ้าเป็น persistent peer → เก็บไว้ (ไม่ลบ) แค่ mark ว่า disconnected
             final wasPersistent = _persistentPeers.containsKey(id);
             if (wasPersistent) {
-              print('💾 Persistent peer disconnected - will keep for auto-reconnect');
+              Log.d('💾 Persistent peer disconnected - will keep for auto-reconnect');
               _lostPeers[id] = DateTime.now();
               // ไม่ลบจาก _persistentPeers
             }
@@ -727,50 +729,50 @@ class NearbyTransport implements Transport {
             
             // ⚡ ถ้าเป็น cleanup disconnect (เพื่อ retry) → ไม่ลบจาก _found
             if (_cleanupDisconnects.contains(id)) {
-              print('   This is a cleanup disconnect - keeping endpoint in _found for retry');
+              Log.d('   This is a cleanup disconnect - keeping endpoint in _found for retry');
               _cleanupDisconnects.remove(id);
             } else if (!wasPersistent) {
               // disconnect จริงๆ และไม่ใช่ persistent → ลบออกจาก _found
               _found.remove(id);
             } else {
               // persistent peer → เก็บไว้ใน _found เพื่อแสดงใน UI (แต่ status = disconnected)
-              print('   Keeping persistent peer in _found for display');
+              Log.d('   Keeping persistent peer in _found for display');
             }
             
             _emitPeers();
           },
         );
         _isAdvertising = true;
-        print('✅ Advertising started successfully as: $deviceName');
+        Log.d('✅ Advertising started successfully as: $deviceName');
       } catch (e) {
-        print('⚠️ Advertising failed (continuing anyway): $e');
+        Log.d('⚠️ Advertising failed (continuing anyway): $e');
         // Continue even if advertising fails - we can still discover others
         _isAdvertising = false;
       }
 
     // 2) ค้นหา endpoint อื่น
-    print('🔎 Starting discovery with serviceId: $_serviceId');
-    print('   My device name: "$deviceName"');
+    Log.d('🔎 Starting discovery with serviceId: $_serviceId');
+    Log.d('   My device name: "$deviceName"');
     await Nearby().startDiscovery(
       _serviceId,
       _strategy,
       onEndpointFound: (id, name, serviceId) {
-        print('🔍 Found endpoint: id=$id, name="$name", serviceId=$serviceId');
-        print('   Comparing with my name: "$deviceName"');
+        Log.d('🔍 Found endpoint: id=$id, name="$name", serviceId=$serviceId');
+        Log.d('   Comparing with my name: "$deviceName"');
         
         // ⚠️ ป้องกันการพบเครื่องตัวเอง
         if (name == deviceName) {
-          print('⛔ Skipped: Found self (name=$name)');
+          Log.d('⛔ Skipped: Found self (name=$name)');
           return;
         }
         
-        print('✅ This is a different device, processing...');
+        Log.d('✅ This is a different device, processing...');
         
         // ⚡ ถ้าเคย lost ไป → ลบออกจาก lost list (กลับมาแล้ว!)
         if (_lostPeers.containsKey(id)) {
           final lostTime = _lostPeers[id]!;
           final downDuration = DateTime.now().difference(lostTime);
-          print('🔄 Peer $id was lost for ${downDuration.inSeconds} seconds - reconnecting...');
+          Log.d('🔄 Peer $id was lost for ${downDuration.inSeconds} seconds - reconnecting...');
           _lostPeers.remove(id);
         }
         
@@ -778,12 +780,12 @@ class NearbyTransport implements Transport {
         
         // ตรวจสอบว่ากำลัง connecting อยู่หรือเชื่อมต่อแล้วหรือไม่
         if (_pendingConnections.contains(id)) {
-          print('⏭️ Already connecting to $id, skip');
+          Log.d('⏭️ Already connecting to $id, skip');
           return;
         }
         
         if (_connected.containsKey(id)) {
-          print('✅ Already connected to $id, skip');
+          Log.d('✅ Already connected to $id, skip');
           _emitPeers();
           return;
         }
@@ -791,7 +793,7 @@ class NearbyTransport implements Transport {
         // ⚡ ถ้าเป็น persistent peer → ให้ priority สูง (reconnect เลย)
         final isPersistent = _persistentPeers.containsKey(id);
         if (isPersistent) {
-          print('⭐ Persistent peer detected - auto-reconnecting immediately');
+          Log.d('⭐ Persistent peer detected - auto-reconnecting immediately');
         }
         
         // ⚠️ ป้องกัน bidirectional request: ใช้ชื่ออุปกรณ์เปรียบเทียบ
@@ -802,13 +804,13 @@ class NearbyTransport implements Transport {
         
         if (comparison > 0 && !isPersistent) {
           // deviceName > name → ฉันมีชื่อมากกว่า → รอให้อีกฝั่ง request (ยกเว้น persistent peers)
-          print('⏳ My name "$deviceName" > Peer name "$name"');
-          print('   Waiting for peer to initiate connection (I will accept via advertising)');
+          Log.d('⏳ My name "$deviceName" > Peer name "$name"');
+          Log.d('   Waiting for peer to initiate connection (I will accept via advertising)');
           
           // 🔧 แต่ถ้ารอนานเกิน 5 วินาที แล้วยังไม่มี connection → ลอง request เอง
           Future.delayed(const Duration(seconds: 5), () {
             if (!_connected.containsKey(id) && _found.contains(id)) {
-              print('⏰ Timeout waiting for peer $name to connect - initiating connection myself');
+              Log.d('⏰ Timeout waiting for peer $name to connect - initiating connection myself');
               _pendingConnections.add(id);
               final delay = isPersistent ? 500 : 1500;
               Future.delayed(Duration(milliseconds: delay), () {
@@ -826,39 +828,39 @@ class NearbyTransport implements Transport {
           // ชื่อเหมือนกัน (ไม่ควรเกิด แต่ป้องกันไว้) → ใช้ ID เป็นตัวตัดสิน
           final idComparison = deviceName.hashCode.compareTo(id.hashCode);
           if (idComparison >= 0) {
-            print('⏳ Same name - using ID comparison → waiting');
+            Log.d('⏳ Same name - using ID comparison → waiting');
             return;
           }
         }
         
-        print('✅ My name "$deviceName" < Peer name "$name" ${isPersistent ? "(or persistent peer)" : ""}');
-        print('   I will initiate connection');
+        Log.d('✅ My name "$deviceName" < Peer name "$name" ${isPersistent ? "(or persistent peer)" : ""}');
+        Log.d('   I will initiate connection');
         
         // เพิ่มใน pending list
         _pendingConnections.add(id);
         
         // ⚡ ลด delay สำหรับ persistent peers (500ms แทน 1000ms)
         final delay = isPersistent ? 500 : 1500; // 🔧 เพิ่มเป็น 1500ms ให้ advertising พร้อม
-        print('📡 Endpoint found: $id (name: $name) - รอ ${delay}ms ให้ advertising พร้อม...');
+        Log.d('📡 Endpoint found: $id (name: $name) - รอ ${delay}ms ให้ advertising พร้อม...');
         
         Future.delayed(Duration(milliseconds: delay), () {
           // ตรวจสอบว่า endpoint ยังอยู่ไหม
           if (!_found.contains(id)) {
-            print('⚠️ Endpoint $id หายไปแล้ว - ยกเลิกการเชื่อมต่อ');
+            Log.d('⚠️ Endpoint $id หายไปแล้ว - ยกเลิกการเชื่อมต่อ');
             _pendingConnections.remove(id);
             return;
           }
           
           // ตรวจสอบอีกครั้งว่ายังไม่ได้เชื่อมต่อ
           if (_connected.containsKey(id)) {
-            print('✅ Already connected to $id during delay, skip request');
+            Log.d('✅ Already connected to $id during delay, skip request');
             _pendingConnections.remove(id);
             _emitPeers(); // ⚡ emit ทันทีเมื่อพบว่า connected แล้ว
             return;
           }
           
           // ลองเชื่อมต่อ
-          print('📞 Requesting connection to $id (after ${delay}ms delay - advertising should be ready)...');
+          Log.d('📞 Requesting connection to $id (after ${delay}ms delay - advertising should be ready)...');
           _doRequestConnection(id);
         });
         
@@ -867,11 +869,11 @@ class NearbyTransport implements Transport {
       onEndpointLost: (id) {
         if (id == null) return;
         
-        print('🔴 Lost endpoint: $id');
+        Log.d('🔴 Lost endpoint: $id');
         
         // ⚡ ถ้าเคยเชื่อมต่อแล้ว → เก็บไว้ใน persistent peers (ไม่ลบทันที)
         if (_connected.containsKey(id)) {
-          print('💾 Keeping peer $id in persistent list - will auto-reconnect if found again');
+          Log.d('💾 Keeping peer $id in persistent list - will auto-reconnect if found again');
           _persistentPeers[id] = _connected[id]!;
           _lostPeers[id] = DateTime.now();
           
@@ -879,7 +881,7 @@ class NearbyTransport implements Transport {
           // ไม่ลบจาก _found เพื่อให้ยังแสดงใน UI (แต่ mark ว่าหายชั่วคราว)
         } else {
           // ถ้ายังไม่เคยเชื่อมต่อ (เจอแต่ยังไม่ได้ connect) → ลบได้เลย
-          print('   Peer was not connected - removing from _found');
+          Log.d('   Peer was not connected - removing from _found');
           _found.remove(id);
         }
         
@@ -887,16 +889,16 @@ class NearbyTransport implements Transport {
       },
     );
     _isDiscovering = true;
-    print('✅ Discovery started successfully');
+    Log.d('✅ Discovery started successfully');
     } catch (e) {
-      print('❌ Nearby Discovery failed: $e');
+      Log.d('❌ Nearby Discovery failed: $e');
       _state = DiscoveryState.idle;
       _isAdvertising = false;
       _isDiscovering = false;
       
       // ถ้าเจอ ALREADY_DISCOVERING error ให้ force stop และลองใหม่
       if (e.toString().contains('ALREADY_DISCOVERING') || e.toString().contains('8002')) {
-        print('⚠️ Already discovering - force stopping and retrying...');
+        Log.d('⚠️ Already discovering - force stopping and retrying...');
         try {
           await Nearby().stopDiscovery();
           await Nearby().stopAdvertising();
@@ -904,10 +906,10 @@ class NearbyTransport implements Transport {
           await Future.delayed(const Duration(milliseconds: 1000));
           
           // ลองเริ่มใหม่อีกครั้ง (recursive call)
-          print('🔄 Retrying discovery after cleanup...');
+          Log.d('🔄 Retrying discovery after cleanup...');
           return await startDiscovery();
         } catch (stopError) {
-          print('⚠️ Error during force stop: $stopError');
+          Log.d('⚠️ Error during force stop: $stopError');
           // ถ้ายังไม่ได้ ให้ throw error เพื่อบอกว่าต้องลองใหม่ทีหลัง
           throw Exception('Failed to start discovery. Please try again.');
         }
@@ -925,22 +927,22 @@ class NearbyTransport implements Transport {
                       filePath.toLowerCase().endsWith('.avi');
       final fileType = isVideo ? 'วิดีโอ' : 'รูปภาพ';
       
-      print('📤 กำลังส่ง$fileType: $filePath');
+      Log.d('📤 กำลังส่ง$fileType: $filePath');
       
       // ตรวจสอบว่าไฟล์มีอยู่จริง
       final file = File(filePath);
       if (!await file.exists()) {
-        print('❌ ไฟล์ไม่พบ: $filePath');
+        Log.d('❌ ไฟล์ไม่พบ: $filePath');
         throw Exception('File not found: $filePath');
       }
       
       final fileSize = await file.length();
-      print('📊 ขนาดไฟล์: ${(fileSize / 1024).toStringAsFixed(2)} KB');
+      Log.d('📊 ขนาดไฟล์: ${(fileSize / 1024).toStringAsFixed(2)} KB');
       
       // สำหรับไฟล์เล็ก (<500KB) ส่งเป็น bytes
       // สำหรับไฟล์ใหญ่ ใช้ sendFilePayload
       if (fileSize < 500 * 1024) {
-        print('📦 ส่งแบบ bytes (ไฟล์เล็ก)');
+        Log.d('📦 ส่งแบบ bytes (ไฟล์เล็ก)');
         
         final bytes = await file.readAsBytes();
         
@@ -959,30 +961,30 @@ class NearbyTransport implements Transport {
           ...bytes,
         ]);
         
-        print('📦 ขนาด payload รวม: ${(payload.length / 1024).toStringAsFixed(2)} KB');
+        Log.d('📦 ขนาด payload รวม: ${(payload.length / 1024).toStringAsFixed(2)} KB');
         
         // ส่งเป็น bytes payload
         if (to != null) {
           // ตรวจสอบว่าเชื่อมต่ออยู่จริงหรือไม่
           if (!_connected.containsKey(to.id)) {
-            print('❌ ไม่ได้เชื่อมต่อกับ ${to.name} (${to.id})');
-            print('   รายการที่เชื่อมต่อ: ${_connected.keys.toList()}');
+            Log.d('❌ ไม่ได้เชื่อมต่อกับ ${to.name} (${to.id})');
+            Log.d('   รายการที่เชื่อมต่อ: ${_connected.keys.toList()}');
             throw Exception('Not connected to ${to.name}');
           }
           
-          print('📤 ส่ง$fileType ไปยัง: ${to.name} (${to.id})');
-          print('   Connected: ${_connected.containsKey(to.id)}');
+          Log.d('📤 ส่ง$fileType ไปยัง: ${to.name} (${to.id})');
+          Log.d('   Connected: ${_connected.containsKey(to.id)}');
           await Nearby().sendBytesPayload(to.id, payload);
-          print('✅ sendBytesPayload เสร็จสิ้น');
+          Log.d('✅ sendBytesPayload เสร็จสิ้น');
         } else {
-          print('📡 Broadcast $fileType ไปยัง ${_connected.length} อุปกรณ์');
+          Log.d('📡 Broadcast $fileType ไปยัง ${_connected.length} อุปกรณ์');
           for (final id in _connected.keys) {
             await Nearby().sendBytesPayload(id, payload);
           }
         }
       } else {
         // ไฟล์ใหญ่ - ใช้ sendFilePayload
-        print('📦 ส่งแบบ file payload (ไฟล์ใหญ่)');
+        Log.d('📦 ส่งแบบ file payload (ไฟล์ใหญ่)');
         
         // ⚠️ ส่งข้อความบอกประเภทไฟล์ก่อน (สำหรับไฟล์ใหญ่)
         final fileName = file.uri.pathSegments.last;
@@ -990,14 +992,14 @@ class NearbyTransport implements Transport {
         final metadataBytes = Uint8List.fromList(utf8.encode(metadataMessage));
         
         if (to != null) {
-          print('📤 ส่ง metadata ไปยัง: ${to.name}');
+          Log.d('📤 ส่ง metadata ไปยัง: ${to.name}');
           await Nearby().sendBytesPayload(to.id, metadataBytes);
           await Future.delayed(const Duration(milliseconds: 200)); // รอให้ส่ง metadata ก่อน
           
-          print('📤 ส่ง$fileType ไปยัง: ${to.name} (${to.id})');
+          Log.d('📤 ส่ง$fileType ไปยัง: ${to.name} (${to.id})');
           await Nearby().sendFilePayload(to.id, filePath);
         } else {
-          print('📡 Broadcast metadata และ$fileType ไปยัง ${_connected.length} อุปกรณ์');
+          Log.d('📡 Broadcast metadata และ$fileType ไปยัง ${_connected.length} อุปกรณ์');
           for (final id in _connected.keys) {
             await Nearby().sendBytesPayload(id, metadataBytes);
             await Future.delayed(const Duration(milliseconds: 200));
@@ -1006,17 +1008,17 @@ class NearbyTransport implements Transport {
         }
       }
       
-      print('✅ ส่ง$fileType สำเร็จ');
+      Log.d('✅ ส่ง$fileType สำเร็จ');
     } catch (e, stackTrace) {
-      print('❌ ส่งไฟล์ล้มเหลว: $e');
-      print('Stack trace: $stackTrace');
+      Log.d('❌ ส่งไฟล์ล้มเหลว: $e');
+      Log.d('Stack trace: $stackTrace');
       rethrow; // โยน error ต่อให้ UI จัดการ
     }
   }
 
   @override
   Future<void> stopDiscovery() async {
-    print('🔴 Stopping Nearby Discovery...');
+    Log.d('🔴 Stopping Nearby Discovery...');
     _state = DiscoveryState.idle;
     
     // Stop discovery first
@@ -1024,9 +1026,9 @@ class NearbyTransport implements Transport {
       try {
         await Nearby().stopDiscovery();
         _isDiscovering = false;
-        print('✅ Discovery stopped');
+        Log.d('✅ Discovery stopped');
       } catch (e) {
-        print('⚠️ Failed to stop discovery: $e');
+        Log.d('⚠️ Failed to stop discovery: $e');
         _isDiscovering = false;
       }
     }
@@ -1036,9 +1038,9 @@ class NearbyTransport implements Transport {
       try {
         await Nearby().stopAdvertising();
         _isAdvertising = false;
-        print('✅ Advertising stopped');
+        Log.d('✅ Advertising stopped');
       } catch (e) {
-        print('⚠️ Failed to stop advertising: $e');
+        Log.d('⚠️ Failed to stop advertising: $e');
         _isAdvertising = false;
       }
     }
@@ -1046,9 +1048,9 @@ class NearbyTransport implements Transport {
     // Stop all connections
     try {
       await Nearby().stopAllEndpoints();
-      print('✅ All endpoints stopped');
+      Log.d('✅ All endpoints stopped');
     } catch (e) {
-      print('⚠️ Failed to stop all endpoints: $e');
+      Log.d('⚠️ Failed to stop all endpoints: $e');
     }
     
     _found.clear();
@@ -1059,7 +1061,7 @@ class NearbyTransport implements Transport {
 
   /// 🆕 บังคับลบ persistent peer (ถ้าผู้ใช้ต้องการลบถาวร)
   void removePersistentPeer(String peerId) {
-    print('🗑️ Removing persistent peer: $peerId');
+    Log.d('🗑️ Removing persistent peer: $peerId');
     _persistentPeers.remove(peerId);
     _lostPeers.remove(peerId);
     _connected.remove(peerId);
@@ -1078,15 +1080,15 @@ class NearbyTransport implements Transport {
     if (to != null) {
       // ส่งเจาะจง
       if (!_connected.containsKey(to.id)) {
-        print('⚠️ ยังไม่ได้เชื่อมต่อกับ ${to.name} (${to.id})');
+        Log.d('⚠️ ยังไม่ได้เชื่อมต่อกับ ${to.name} (${to.id})');
         // ยังไม่ connect? ลอง request ต่อ
         // (ใน startDiscovery เราพยายาม auto-connect ไว้อยู่แล้ว)
       }
-      print('📤 ส่งข้อความถึง ${to.name} (${to.id})');
+      Log.d('📤 ส่งข้อความถึง ${to.name} (${to.id})');
       await Nearby().sendBytesPayload(to.id, uint8Bytes);  // ส่งเป็น Uint8List
     } else {
       // broadcast = ส่งให้ทุกตัวที่เชื่อมอยู่
-      print('📡 Broadcast ข้อความไปยัง ${_connected.length} อุปกรณ์');
+      Log.d('📡 Broadcast ข้อความไปยัง ${_connected.length} อุปกรณ์');
       for (final id in _connected.keys) {
         await Nearby().sendBytesPayload(id, uint8Bytes);  // ส่งเป็น Uint8List
       }
@@ -1094,13 +1096,13 @@ class NearbyTransport implements Transport {
 
     // ⚠️ ไม่ emit message จากตัวเอง เพราะจะทำให้ซ้ำ
     // AppState จะจัดการเพิ่มข้อความที่ส่งเอง
-    print('✅ ส่งข้อความเรียบร้อย: ${body.substring(0, body.length > 50 ? 50 : body.length)}...');
+    Log.d('✅ ส่งข้อความเรียบร้อย: ${body.substring(0, body.length > 50 ? 50 : body.length)}...');
   }
 
   /// 🆕 บันทึกรูปภาพที่ได้รับเป็น bytes
   Future<void> _saveReceivedImage(Uint8List imageBytes, String originalFileName, String fromPeerId) async {
     try {
-      print('💾 กำลังบันทึกรูปภาพ: $originalFileName (${imageBytes.length} bytes)');
+      Log.d('💾 กำลังบันทึกรูปภาพ: $originalFileName (${imageBytes.length} bytes)');
       
       // สร้างโฟลเดอร์เก็บรูปภาพ
       final appDir = await getApplicationDocumentsDirectory();
@@ -1108,7 +1110,7 @@ class NearbyTransport implements Transport {
       
       if (!await imageDir.exists()) {
         await imageDir.create(recursive: true);
-        print('📁 สร้างโฟลเดอร์: ${imageDir.path}');
+        Log.d('📁 สร้างโฟลเดอร์: ${imageDir.path}');
       }
       
       // สร้างชื่อไฟล์ใหม่
@@ -1119,13 +1121,13 @@ class NearbyTransport implements Transport {
       final newFileName = 'image_$timestamp$extension';
       final filePath = '${imageDir.path}/$newFileName';
       
-      print('📝 บันทึกไปที่: $filePath');
+      Log.d('📝 บันทึกไปที่: $filePath');
       
       // บันทึกไฟล์
       final file = File(filePath);
       await file.writeAsBytes(imageBytes);
       
-      print('✅ บันทึกรูปภาพสำเร็จ: $filePath (${imageBytes.length} bytes)');
+      Log.d('✅ บันทึกรูปภาพสำเร็จ: $filePath (${imageBytes.length} bytes)');
       
       // ส่ง event ว่าได้รับรูปภาพแล้ว
       _fileCtrl.add(ReceivedFile(
@@ -1134,7 +1136,7 @@ class NearbyTransport implements Transport {
         time: DateTime.now(),
       ));
     } catch (e) {
-      print('❌ บันทึกรูปภาพล้มเหลว: $e');
+      Log.d('❌ บันทึกรูปภาพล้มเหลว: $e');
     }
   }
 
@@ -1161,7 +1163,7 @@ class NearbyTransport implements Transport {
       final file = File(filePath);
       await file.writeAsBytes(videoBytes);
       
-      print('✅ บันทึกวิดีโอสำเร็จ: $filePath (${videoBytes.length} bytes)');
+      Log.d('✅ บันทึกวิดีโอสำเร็จ: $filePath (${videoBytes.length} bytes)');
       
       // ส่ง event ว่าได้รับวิดีโอแล้ว
       _fileCtrl.add(ReceivedFile(
@@ -1170,15 +1172,15 @@ class NearbyTransport implements Transport {
         time: DateTime.now(),
       ));
     } catch (e) {
-      print('❌ บันทึกวิดีโอล้มเหลว: $e');
+      Log.d('❌ บันทึกวิดีโอล้มเหลว: $e');
     }
   }
 
   /// 🆕 Copy ไฟล์จาก Content URI ไปเก็บถาวรใน App Directory  
   Future<String> _copyFileToPermanentStorage(String contentUri, {String? fileType}) async {
     try {
-      print('📋 กำลังคัดลอกไฟล์: $contentUri');
-      print('📋 File type from metadata: $fileType');
+      Log.d('📋 กำลังคัดลอกไฟล์: $contentUri');
+      Log.d('📋 File type from metadata: $fileType');
       
       // ตรวจสอบประเภทไฟล์:
       // 1. ใช้ fileType จาก metadata ก่อน (สำหรับไฟล์ใหญ่)
@@ -1186,12 +1188,12 @@ class NearbyTransport implements Transport {
       bool isVideo;
       if (fileType != null) {
         isVideo = fileType == 'VIDEO';
-        print('✅ ใช้ประเภทไฟล์จาก metadata: ${isVideo ? "วิดีโอ" : "รูปภาพ"}');
+        Log.d('✅ ใช้ประเภทไฟล์จาก metadata: ${isVideo ? "วิดีโอ" : "รูปภาพ"}');
       } else {
         isVideo = contentUri.toLowerCase().contains('.mp4') || 
                   contentUri.toLowerCase().contains('.mov') ||
                   contentUri.toLowerCase().contains('video');
-        print('⚠️ ไม่มี metadata, ตรวจสอบจาก URI: ${isVideo ? "วิดีโอ" : "รูปภาพ"}');
+        Log.d('⚠️ ไม่มี metadata, ตรวจสอบจาก URI: ${isVideo ? "วิดีโอ" : "รูปภาพ"}');
       }
       
       // สร้างโฟลเดอร์เก็บไฟล์ใน App Directory
@@ -1200,7 +1202,7 @@ class NearbyTransport implements Transport {
       
       if (!await fileDir.exists()) {
         await fileDir.create(recursive: true);
-        print('📁 สร้างโฟลเดอร์: ${fileDir.path}');
+        Log.d('📁 สร้างโฟลเดอร์: ${fileDir.path}');
       }
       
       // สร้างชื่อไฟล์ปลายทาง
@@ -1218,7 +1220,7 @@ class NearbyTransport implements Transport {
         final sourceFile = File(uri.path);
         if (await sourceFile.exists()) {
           await sourceFile.copy(destinationPath);
-          print('✅ คัดลอกไฟล์สำเร็จ: $destinationPath');
+          Log.d('✅ คัดลอกไฟล์สำเร็จ: $destinationPath');
           return destinationPath;
         }
       }
@@ -1234,11 +1236,11 @@ class NearbyTransport implements Transport {
             // เขียนไฟล์
             final destinationFile = File(destinationPath);
             await destinationFile.writeAsBytes(bytes);
-            print('✅ คัดลอกไฟล์สำเร็จ (method channel): $destinationPath (${bytes.length} bytes)');
+            Log.d('✅ คัดลอกไฟล์สำเร็จ (method channel): $destinationPath (${bytes.length} bytes)');
             return destinationPath;
           }
         } catch (e) {
-          print('⚠️ Method channel failed, trying file system: $e');
+          Log.d('⚠️ Method channel failed, trying file system: $e');
         }
         
         // Fallback: ลองใช้ file system โดยตรง
@@ -1260,7 +1262,7 @@ class NearbyTransport implements Transport {
               final testFile = File(possiblePath);
               if (await testFile.exists()) {
                 await testFile.copy(destinationPath);
-                print('✅ คัดลอกสำเร็จจาก: $possiblePath');
+                Log.d('✅ คัดลอกสำเร็จจาก: $possiblePath');
                 return destinationPath;
               }
             } catch (e) {
@@ -1270,12 +1272,12 @@ class NearbyTransport implements Transport {
         }
       }
       
-      print('⚠️ ไม่สามารถ copy ไฟล์ได้ ใช้ URI เดิม');
+      Log.d('⚠️ ไม่สามารถ copy ไฟล์ได้ ใช้ URI เดิม');
       return contentUri;
       
     } catch (e, stackTrace) {
-      print('❌ เกิดข้อผิดพลาดในการคัดลอกไฟล์: $e');
-      print('Stack trace: $stackTrace');
+      Log.d('❌ เกิดข้อผิดพลาดในการคัดลอกไฟล์: $e');
+      Log.d('Stack trace: $stackTrace');
       return contentUri;
     }
   }

@@ -1,7 +1,8 @@
-// lib/core/emergency_contact_db.dart
+﻿// lib/core/emergency_contact_db.dart
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'emergency_contact_models.dart';
+import 'package:offgrid_sos/core/logger.dart';
 
 class EmergencyContactDB {
   static const String _key = 'emergency_contacts';
@@ -28,7 +29,7 @@ class EmergencyContactDB {
           .map((json) => EmergencyContact.fromJson(json as Map<String, dynamic>))
           .toList();
     } catch (e) {
-      print('Error loading emergency contacts: $e');
+      Log.d('Error loading emergency contacts: $e');
       return [];
     }
   }

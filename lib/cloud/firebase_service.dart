@@ -1,4 +1,4 @@
-// lib/cloud/firebase_service.dart
+﻿// lib/cloud/firebase_service.dart
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
@@ -8,6 +8,33 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart' as fa;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../core/friend_models.dart';
+import 'package:offgrid_sos/core/logger.dart';
+
+String _friendlyAuthError(Object e) {
+  if (e is fa.FirebaseAuthException) {
+    switch (e.code) {
+      case 'invalid-credential':
+      case 'wrong-password':
+      case 'user-not-found':
+        return 'อีเมลหรือรหัสผ่านไม่ถูกต้อง';
+      case 'invalid-email':
+        return 'รูปแบบอีเมลไม่ถูกต้อง';
+      case 'user-disabled':
+        return 'บัญชีนี้ถูกระงับการใช้งาน';
+      case 'email-already-in-use':
+        return 'อีเมลนี้ถูกใช้สมัครสมาชิกแล้ว';
+      case 'weak-password':
+        return 'รหัสผ่านไม่ปลอดภัยพอ กรุณาตั้งรหัสผ่านที่ยาวขึ้น';
+      case 'too-many-requests':
+        return 'พยายามเข้าสู่ระบบบ่อยเกินไป กรุณาลองใหม่อีกครั้งในภายหลัง';
+      case 'network-request-failed':
+        return 'เชื่อมต่ออินเทอร์เน็ตไม่ได้ กรุณาตรวจสอบการเชื่อมต่อ';
+      default:
+        return 'เข้าสู่ระบบไม่สำเร็จ กรุณาลองใหม่อีกครั้ง';
+    }
+  }
+  return 'เข้าสู่ระบบไม่สำเร็จ กรุณาลองใหม่อีกครั้ง';
+}
 
 class FirebaseService extends ChangeNotifier {
   bool _initialized = false;
@@ -29,6 +56,16 @@ class FirebaseService extends ChangeNotifier {
   }
 
   Future<void> init() async {
+    // เช็คสถานะเน็ตปัจจุบันทันที (onConnectivityChanged จะยิงเฉพาะตอนเน็ต "เปลี่ยน"
+    // เท่านั้น ถ้าเน็ตต่ออยู่แล้วตั้งแต่แอพเปิด เช่นบน Emulator อาจไม่มี event ยิงเลย
+    // ทำให้ _online ค้างเป็น false ตลอด)
+    try {
+      final initialResult = await Connectivity().checkConnectivity();
+      _online = initialResult.isNotEmpty && !initialResult.contains(ConnectivityResult.none);
+    } catch (e) {
+      Log.d('[Connectivity] checkConnectivity failed: $e');
+    }
+
     // ติดตามสถานะเน็ต
     _connSub = Connectivity().onConnectivityChanged.listen((results) {
       _online = results.isNotEmpty && !results.contains(ConnectivityResult.none);
@@ -40,7 +77,7 @@ class FirebaseService extends ChangeNotifier {
       await Firebase.initializeApp();
       _initialized = true;
     } catch (e) {
-      debugPrint('[Firebase] init failed: $e');
+      Log.d('[Firebase] init failed: $e');
       _initialized = false; // ยังให้แอพทำงานออฟไลน์ได้
       notifyListeners();
       return;
@@ -50,7 +87,7 @@ class FirebaseService extends ChangeNotifier {
       _db = FirebaseFirestore.instance;
       _db!.settings = const Settings(persistenceEnabled: true);
     } catch (e) {
-      debugPrint('[Firestore] not ready: $e');
+      Log.d('[Firestore] not ready: $e');
     }
 
     try {
@@ -59,7 +96,7 @@ class FirebaseService extends ChangeNotifier {
         notifyListeners();
       });
     } catch (e) {
-      debugPrint('[Auth] not ready: $e');
+      Log.d('[Auth] not ready: $e');
     }
 
     notifyListeners();
@@ -85,7 +122,7 @@ class FirebaseService extends ChangeNotifier {
       });
       return null;
     } catch (e) {
-      return e.toString();
+      return _friendlyAuthError(e);
     }
   }
 
@@ -99,12 +136,20 @@ class FirebaseService extends ChangeNotifier {
       notifyListeners();
       return null;
     } catch (e) {
-      return e.toString();
+      return _friendlyAuthError(e);
     }
   }
 
   Future<void> signOut() async {
     if (!_initialized) return;
+    // [Fix 2] ตั้งสถานะออฟไลน์ก่อน sign out
+    if (_user != null && _db != null) {
+      try {
+        await updateOnlineStatus(_user!.uid, false);
+      } catch (e) {
+        Log.d('[Firebase] ⚠️ Error set offline before signout: $e');
+      }
+    }
     await fa.FirebaseAuth.instance.signOut();
     _user = null;
     notifyListeners();
@@ -148,11 +193,11 @@ class FirebaseService extends ChangeNotifier {
   /// ค้นหาผู้ใช้จาก User ID
   Future<UserProfile?> findUserByUserId(String userId, {bool forceRefresh = false}) async {
     if (_db == null) {
-      debugPrint('[Firebase] ❌ Database ไม่พร้อม');
+      Log.d('[Firebase] ❌ Database ไม่พร้อม');
       return null;
     }
     try {
-      debugPrint('[Firebase] 🔍 กำลังค้นหา User ID: $userId ${forceRefresh ? "(force reload)" : ""}');
+      Log.d('[Firebase] 🔍 กำลังค้นหา User ID: $userId ${forceRefresh ? "(force reload)" : ""}');
       
       // Force reload from server (ไม่ใช้ cache)
       final source = forceRefresh ? Source.server : Source.serverAndCache;
@@ -160,13 +205,13 @@ class FirebaseService extends ChangeNotifier {
       
       if (doc.exists && doc.data() != null) {
         final data = doc.data()!;
-        debugPrint('[Firebase] ✅ พบผู้ใช้: ${data['name']}, isOnline: ${data['isOnline']}');
+        Log.d('[Firebase] ✅ พบผู้ใช้: ${data['name']}, isOnline: ${data['isOnline']}');
         return UserProfile.fromJson(data);
       } else {
-        debugPrint('[Firebase] ❌ ไม่พบผู้ใช้ ID: $userId');
+        Log.d('[Firebase] ❌ ไม่พบผู้ใช้ ID: $userId');
       }
     } catch (e) {
-      debugPrint('[Firebase] ❌ Error finding user: $e');
+      Log.d('[Firebase] ❌ Error finding user: $e');
     }
     return null;
   }
@@ -185,7 +230,7 @@ class FirebaseService extends ChangeNotifier {
         return UserProfile.fromJson(query.docs.first.data());
       }
     } catch (e) {
-      debugPrint('[Firebase] Error finding user by email: $e');
+      Log.d('[Firebase] Error finding user by email: $e');
     }
     return null;
   }
@@ -205,7 +250,7 @@ class FirebaseService extends ChangeNotifier {
           .map((doc) => UserProfile.fromJson(doc.data()))
           .toList();
     } catch (e) {
-      debugPrint('[Firebase] Error searching users: $e');
+      Log.d('[Firebase] Error searching users: $e');
       return [];
     }
   }
@@ -213,11 +258,11 @@ class FirebaseService extends ChangeNotifier {
   /// อัพเดทสถานะออนไลน์
   Future<void> updateOnlineStatus(String userId, bool isOnline) async {
     if (_db == null) {
-      debugPrint('[Firebase] ⚠️ Database ไม่พร้อม - ไม่สามารถอัปเดตสถานะออนไลน์');
+      Log.d('[Firebase] ⚠️ Database ไม่พร้อม - ไม่สามารถอัปเดตสถานะออนไลน์');
       return;
     }
     try {
-      debugPrint('[Firebase] 🔄 อัปเดตสถานะออนไลน์: $userId → ${isOnline ? "ออนไลน์" : "ออฟไลน์"}');
+      Log.d('[Firebase] 🔄 อัปเดตสถานะออนไลน์: $userId → ${isOnline ? "ออนไลน์" : "ออฟไลน์"}');
       
       // ใช้ set พร้อม merge: true เพื่อสร้าง document ถ้ายังไม่มี หรืออัปเดตถ้ามีแล้ว
       await _db!.collection('users').doc(userId).set({
@@ -225,19 +270,19 @@ class FirebaseService extends ChangeNotifier {
         'lastActiveAt': DateTime.now().toIso8601String(),
       }, SetOptions(merge: true));
       
-      debugPrint('[Firebase] ✅ อัปเดตสถานะออนไลน์สำเร็จ');
+      Log.d('[Firebase] ✅ อัปเดตสถานะออนไลน์สำเร็จ');
       
       // ตรวจสอบว่าข้อมูลบันทึกจริงหรือไม่ (แสดง log เฉพาะตอน init)
       // final verify = await _db!.collection('users').doc(userId).get(GetOptions(source: Source.server));
       // if (verify.exists) {
       //   final data = verify.data();
-      //   debugPrint('[Firebase] 🔍 ตรวจสอบข้อมูล: isOnline = ${data?['isOnline']}, lastActiveAt = ${data?['lastActiveAt']}');
+      //   Log.d('[Firebase] 🔍 ตรวจสอบข้อมูล: isOnline = ${data?['isOnline']}, lastActiveAt = ${data?['lastActiveAt']}');
       // } else {
-      //   debugPrint('[Firebase] ⚠️ ไม่พบ document หลังบันทึก!');
+      //   Log.d('[Firebase] ⚠️ ไม่พบ document หลังบันทึก!');
       // }
     } catch (e, stackTrace) {
-      debugPrint('[Firebase] ❌ Error updating online status: $e');
-      debugPrint('[Firebase] ❌ Stack trace: $stackTrace');
+      Log.d('[Firebase] ❌ Error updating online status: $e');
+      Log.d('[Firebase] ❌ Stack trace: $stackTrace');
       rethrow;
     }
   }
@@ -248,16 +293,16 @@ class FirebaseService extends ChangeNotifier {
   Future<bool> sendFriendRequest(FriendRequest request) async {
     if (_db == null) return false;
     try {
-      debugPrint('[Firebase] 📤 ส่งคำขอ: ${request.id}');
-      debugPrint('[Firebase]   - จาก: ${request.fromUserName} (${request.fromUserId})');
-      debugPrint('[Firebase]   - ไปยัง: ${request.toUserId}');
+      Log.d('[Firebase] 📤 ส่งคำขอ: ${request.id}');
+      Log.d('[Firebase]   - จาก: ${request.fromUserName} (${request.fromUserId})');
+      Log.d('[Firebase]   - ไปยัง: ${request.toUserId}');
       
       await _db!.collection('friend_requests').doc(request.id).set(request.toJson());
       
-      debugPrint('[Firebase] ✅ บันทึกคำขอลง Firebase สำเร็จ');
+      Log.d('[Firebase] ✅ บันทึกคำขอลง Firebase สำเร็จ');
       return true;
     } catch (e) {
-      debugPrint('[Firebase] ❌ Error sending friend request: $e');
+      Log.d('[Firebase] ❌ Error sending friend request: $e');
       return false;
     }
   }
@@ -266,7 +311,7 @@ class FirebaseService extends ChangeNotifier {
   Future<List<FriendRequest>> getReceivedFriendRequests(String userId) async {
     if (_db == null) return [];
     try {
-      debugPrint('[Firebase] 🔍 ดึงคำขอสำหรับ: $userId');
+      Log.d('[Firebase] 🔍 ดึงคำขอสำหรับ: $userId');
       
       final query = await _db!
           .collection('friend_requests')
@@ -278,14 +323,14 @@ class FirebaseService extends ChangeNotifier {
           .map((doc) => FriendRequest.fromJson(doc.data()))
           .toList();
       
-      debugPrint('[Firebase] ✅ พบ ${requests.length} คำขอที่รอการตอบรับ');
+      Log.d('[Firebase] ✅ พบ ${requests.length} คำขอที่รอการตอบรับ');
       for (final req in requests) {
-        debugPrint('[Firebase]   - จาก: ${req.fromUserName} (${req.fromUserId})');
+        Log.d('[Firebase]   - จาก: ${req.fromUserName} (${req.fromUserId})');
       }
       
       return requests;
     } catch (e) {
-      debugPrint('[Firebase] ❌ Error getting friend requests: $e');
+      Log.d('[Firebase] ❌ Error getting friend requests: $e');
       return [];
     }
   }
@@ -294,12 +339,12 @@ class FirebaseService extends ChangeNotifier {
   Future<bool> respondToFriendRequest(String requestId, bool accept) async {
     if (_db == null) return false;
     try {
-      debugPrint('[Firebase] 🔄 กำลังตอบรับคำขอ: $requestId (accept=$accept)');
+      Log.d('[Firebase] 🔄 กำลังตอบรับคำขอ: $requestId (accept=$accept)');
       
       // ดึงข้อมูลคำขอก่อน
       final requestDoc = await _db!.collection('friend_requests').doc(requestId).get();
       if (!requestDoc.exists) {
-        debugPrint('[Firebase] ⚠️ ไม่พบคำขอ: $requestId');
+        Log.d('[Firebase] ⚠️ ไม่พบคำขอ: $requestId');
         return false;
       }
       
@@ -308,26 +353,26 @@ class FirebaseService extends ChangeNotifier {
       final toUserId = requestData['toUserId'];
       
       if (accept) {
-        // ถ้ายอมรับ ให้เพิ่มเข้าลิสต์เพื่อนของทั้งสองฝ่าย
-        debugPrint('[Firebase] ✅ กำลังเพิ่มเพื่อน 2 ทาง: $fromUserId <-> $toUserId');
-        
-        // เพิ่มเพื่อนให้กับผู้ส่งคำขอ (fromUserId เพิ่ม toUserId)
-        await _addFriendToUserList(fromUserId, toUserId);
-        debugPrint('[Firebase] ✅ เพิ่มเพื่อนให้ผู้ส่ง ($fromUserId)');
-        
-        // เพิ่มเพื่อนให้กับผู้รับคำขอ (toUserId เพิ่ม fromUserId)
+        // ⚠️ Security rules อนุญาตให้เขียนได้แค่ subcollection ของตัวเอง (auth.uid == userId)
+        // ผู้ที่กดรับคำขอคือ toUserId เท่านั้น จึงเพิ่มเพื่อนได้แค่ฝั่งตัวเอง
+        // ฝั่ง fromUserId จะเพิ่มเพื่อนของตัวเองตอน sync ครั้งถัดไป (ดู FriendService.syncWithFirebase)
         await _addFriendToUserList(toUserId, fromUserId);
-        debugPrint('[Firebase] ✅ เพิ่มเพื่อนให้ผู้รับ ($toUserId)');
+        Log.d('[Firebase] ✅ เพิ่มเพื่อนให้ผู้รับ ($toUserId)');
+
+        // mark accepted แทนการลบทันที เพื่อให้ผู้ส่งคำขอ sync แล้วเพิ่มเพื่อนของตัวเองได้
+        await _db!.collection('friend_requests').doc(requestId).set(
+          {'status': 'accepted'},
+          SetOptions(merge: true),
+        );
+        Log.d('[Firebase] ✅ บันทึกสถานะ accepted (รอผู้ส่ง sync เพื่อเพิ่มเพื่อนฝั่งตัวเอง)');
+      } else {
+        await _db!.collection('friend_requests').doc(requestId).delete();
+        Log.d('[Firebase] 🗑️ ลบคำขอออกจาก Firebase แล้ว (rejected)');
       }
-      
-      // 🔥 สำคัญ: ลบคำขอออกจาก Firebase แทนการ update status
-      // เพื่อป้องกันคำขอซ้ำ
-      await _db!.collection('friend_requests').doc(requestId).delete();
-      debugPrint('[Firebase] 🗑️ ลบคำขอออกจาก Firebase แล้ว');
-      
+
       return true;
     } catch (e) {
-      debugPrint('[Firebase] ❌ Error responding to friend request: $e');
+      Log.d('[Firebase] ❌ Error responding to friend request: $e');
       return false;
     }
   }
@@ -336,19 +381,19 @@ class FirebaseService extends ChangeNotifier {
   Future<void> _addFriendToUserList(String userId, String friendUserId) async {
     if (_db == null) return;
     try {
-      debugPrint('[Firebase] 🔄 กำลังเพิ่มเพื่อน');
-      debugPrint('[Firebase]   - ให้ผู้ใช้: $userId');
-      debugPrint('[Firebase]   - เพิ่มเพื่อน: $friendUserId');
+      Log.d('[Firebase] 🔄 กำลังเพิ่มเพื่อน');
+      Log.d('[Firebase]   - ให้ผู้ใช้: $userId');
+      Log.d('[Firebase]   - เพิ่มเพื่อน: $friendUserId');
       
       // ดึงข้อมูลของเพื่อน
       final friendDoc = await _db!.collection('users').doc(friendUserId).get();
       if (!friendDoc.exists) {
-        debugPrint('[Firebase] ⚠️ ไม่พบข้อมูลผู้ใช้: $friendUserId');
+        Log.d('[Firebase] ⚠️ ไม่พบข้อมูลผู้ใช้: $friendUserId');
         return;
       }
       
       final friendData = friendDoc.data()!;
-      debugPrint('[Firebase] ✅ พบข้อมูลเพื่อน: ${friendData['name']} (ID: ${friendData['id']})');
+      Log.d('[Firebase] ✅ พบข้อมูลเพื่อน: ${friendData['name']} (ID: ${friendData['id']})');
       
       final friend = Friend(
         id: 'friend_${userId}_$friendUserId',
@@ -360,7 +405,7 @@ class FirebaseService extends ChangeNotifier {
         isOnline: friendData['isOnline'] ?? false,
       );
 
-      debugPrint('[Firebase] 💾 บันทึกเพื่อน: ${friend.name} (userId: ${friend.userId}) -> ลง collection ของ user $userId');
+      Log.d('[Firebase] 💾 บันทึกเพื่อน: ${friend.name} (userId: ${friend.userId}) -> ลง collection ของ user $userId');
       
       await _db!
           .collection('users')
@@ -369,11 +414,41 @@ class FirebaseService extends ChangeNotifier {
           .doc(friendUserId)
           .set(friend.toJson());
       
-      debugPrint('[Firebase] ✅ เพิ่มเพื่อนสำเร็จ');
+      Log.d('[Firebase] ✅ เพิ่มเพื่อนสำเร็จ');
     } catch (e, stackTrace) {
-      debugPrint('[Firebase] ❌ Error adding friend to user list: $e');
-      debugPrint('[Firebase] ❌ Stack trace: $stackTrace');
+      Log.d('[Firebase] ❌ Error adding friend to user list: $e');
+      Log.d('[Firebase] ❌ Stack trace: $stackTrace');
       rethrow; // throw ต่อเพื่อให้รู้ว่า error จริงๆ
+    }
+  }
+
+  /// ดึงคำขอที่เราส่งไปแล้วถูกอีกฝั่งกดรับ (status=accepted)
+  /// ใช้เพื่อให้ผู้ส่งคำขอเพิ่มเพื่อนของตัวเองได้ (เขียนได้แค่ subcollection ของตัวเองตาม security rules)
+  Future<List<Map<String, dynamic>>> getAcceptedSentRequests(String userId) async {
+    if (_db == null) return [];
+    try {
+      final query = await _db!
+          .collection('friend_requests')
+          .where('fromUserId', isEqualTo: userId)
+          .where('status', isEqualTo: 'accepted')
+          .get();
+
+      return query.docs.map((doc) => {'id': doc.id, ...doc.data()}).toList();
+    } catch (e) {
+      Log.d('[Firebase] ❌ Error getting accepted sent requests: $e');
+      return [];
+    }
+  }
+
+  /// เพิ่มเพื่อนฝั่งผู้ส่งคำขอ (หลังอีกฝั่งกดรับแล้ว) และลบคำขอทิ้ง
+  Future<void> completeAcceptedRequest(String requestId, String userId, String friendUserId) async {
+    if (_db == null) return;
+    try {
+      await _addFriendToUserList(userId, friendUserId);
+      await _db!.collection('friend_requests').doc(requestId).delete();
+      Log.d('[Firebase] ✅ เพิ่มเพื่อนฝั่งผู้ส่งสำเร็จ และลบคำขอแล้ว: $friendUserId');
+    } catch (e) {
+      Log.d('[Firebase] ❌ Error completing accepted request: $e');
     }
   }
 
@@ -381,7 +456,7 @@ class FirebaseService extends ChangeNotifier {
   Future<List<Friend>> getUserFriends(String userId) async {
     if (_db == null) return [];
     try {
-      debugPrint('[Firebase] 🔍 กำลังดึงเพื่อนของ: $userId');
+      Log.d('[Firebase] 🔍 กำลังดึงเพื่อนของ: $userId');
       final query = await _db!
           .collection('users')
           .doc(userId)
@@ -392,14 +467,14 @@ class FirebaseService extends ChangeNotifier {
           .map((doc) => Friend.fromJson(doc.data()))
           .toList();
       
-      debugPrint('[Firebase] ✅ พบเพื่อน: ${friends.length} คน');
+      Log.d('[Firebase] ✅ พบเพื่อน: ${friends.length} คน');
       for (final friend in friends) {
-        debugPrint('[Firebase]   - ${friend.name} (${friend.userId})');
+        Log.d('[Firebase]   - ${friend.name} (${friend.userId})');
       }
       
       return friends;
     } catch (e) {
-      debugPrint('[Firebase] ❌ Error getting user friends: $e');
+      Log.d('[Firebase] ❌ Error getting user friends: $e');
       return [];
     }
   }
@@ -426,7 +501,7 @@ class FirebaseService extends ChangeNotifier {
       
       return true;
     } catch (e) {
-      debugPrint('[Firebase] Error removing friend: $e');
+      Log.d('[Firebase] Error removing friend: $e');
       return false;
     }
   }
@@ -449,12 +524,12 @@ class FirebaseService extends ChangeNotifier {
       // ใช้ messageId ถ้ามี ไม่งั้นสร้างใหม่
       final msgId = messageId ?? 'msg_${DateTime.now().millisecondsSinceEpoch}';
       
-      debugPrint('[Firebase] 💬 บันทึกข้อความ');
-      debugPrint('[Firebase]   - Chat ID: $chatId');
-      debugPrint('[Firebase]   - Message ID: $msgId');
-      debugPrint('[Firebase]   - จาก: $fromUserId');
-      debugPrint('[Firebase]   - ถึง: $toUserId');
-      debugPrint('[Firebase]   - ข้อความ: $text');
+      Log.d('[Firebase] 💬 บันทึกข้อความ');
+      Log.d('[Firebase]   - Chat ID: $chatId');
+      Log.d('[Firebase]   - Message ID: $msgId');
+      Log.d('[Firebase]   - จาก: $fromUserId');
+      Log.d('[Firebase]   - ถึง: $toUserId');
+      Log.d('[Firebase]   - ข้อความ: $text');
       
       // ใช้ .doc(msgId).set() แทน .add() เพื่อใช้ ID เดียวกัน
       await _db!.collection('friend_chats').doc(chatId).collection('messages').doc(msgId).set({
@@ -468,9 +543,9 @@ class FirebaseService extends ChangeNotifier {
         'isRead': false,
       });
       
-      debugPrint('[Firebase] ✅ บันทึกข้อความสำเร็จ');
+      Log.d('[Firebase] ✅ บันทึกข้อความสำเร็จ');
     } catch (e) {
-      debugPrint('[Firebase] ❌ Error saving friend chat message: $e');
+      Log.d('[Firebase] ❌ Error saving friend chat message: $e');
     }
   }
 
@@ -479,7 +554,7 @@ class FirebaseService extends ChangeNotifier {
     if (_db == null) return [];
     try {
       final chatId = _generateChatId(user1Id, user2Id);
-      debugPrint('[Firebase] 🔍 ดึงข้อความ Chat ID: $chatId');
+      Log.d('[Firebase] 🔍 ดึงข้อความ Chat ID: $chatId');
       
       final query = await _db!
           .collection('friend_chats')
@@ -488,7 +563,7 @@ class FirebaseService extends ChangeNotifier {
           .orderBy('time', descending: false)
           .get();
       
-      debugPrint('[Firebase] ✅ พบ ${query.docs.length} ข้อความ');
+      Log.d('[Firebase] ✅ พบ ${query.docs.length} ข้อความ');
       
       return query.docs.map((doc) {
         final data = doc.data();
@@ -497,8 +572,75 @@ class FirebaseService extends ChangeNotifier {
         return data;
       }).toList();
     } catch (e) {
-      debugPrint('[Firebase] ❌ Error getting friend chat messages: $e');
+      Log.d('[Firebase] ❌ Error getting friend chat messages: $e');
       return [];
+    }
+  }
+
+  /// Real-time stream ข้อความแชทกับเพื่อน — ใช้แทน polling
+  Stream<List<Map<String, dynamic>>> streamFriendChatMessages(
+      String user1Id, String user2Id) {
+    if (_db == null) return const Stream.empty();
+    final chatId = _generateChatId(user1Id, user2Id);
+    return _db!
+        .collection('friend_chats')
+        .doc(chatId)
+        .collection('messages')
+        .orderBy('time', descending: false)
+        .snapshots()
+        .map((snapshot) => snapshot.docs.map((doc) {
+              final data = doc.data();
+              data['id'] = data['id'] ?? doc.id;
+              return data;
+            }).toList());
+  }
+
+  /// Stream ข้อความขาเข้าจากเพื่อนคนนึง (fromUserId == friendUserId) ที่มาหลัง since
+  /// ใช้โดย global inbox listener เพื่อแจ้งเตือนแม้ไม่ได้อยู่ใน chat screen
+  Stream<List<Map<String, dynamic>>> streamIncomingMessagesFromFriend(
+      String currentUserId, String friendUserId, Timestamp since) {
+    if (_db == null) return const Stream.empty();
+    final chatId = _generateChatId(currentUserId, friendUserId);
+    return _db!
+        .collection('friend_chats')
+        .doc(chatId)
+        .collection('messages')
+        .where('fromUserId', isEqualTo: friendUserId)
+        .where('time', isGreaterThan: since)
+        .snapshots()
+        .map((snapshot) => snapshot.docs.map((doc) {
+              final data = doc.data();
+              data['id'] = data['id'] ?? doc.id;
+              return data;
+            }).toList());
+  }
+
+  /// ลบข้อความแชทกับเพื่อนทั้งหมดออกจาก Firestore
+  /// ลบทีละ batch เพื่อไม่เกิน Firestore limit (500 writes/batch)
+  Future<void> deleteFriendChatMessages(String user1Id, String user2Id) async {
+    if (_db == null) return;
+    try {
+      final chatId = _generateChatId(user1Id, user2Id);
+      final col = _db!
+          .collection('friend_chats')
+          .doc(chatId)
+          .collection('messages');
+
+      QuerySnapshot snapshot;
+      do {
+        snapshot = await col.limit(400).get();
+        if (snapshot.docs.isEmpty) break;
+        final batch = _db!.batch();
+        for (final doc in snapshot.docs) {
+          batch.delete(doc.reference);
+        }
+        await batch.commit();
+      } while (snapshot.docs.length == 400);
+
+      Log.d('[Firebase] 🗑️ ลบข้อความแชทกับ friend สำเร็จ (chatId: $chatId)');
+    } catch (e) {
+      Log.d('[Firebase] ❌ Error deleting friend chat: $e');
+      rethrow;
     }
   }
 
@@ -518,7 +660,7 @@ class FirebaseService extends ChangeNotifier {
           .get();
       return snapshot.docs.map((doc) => doc.data()).toList();
     } catch (e) {
-      debugPrint('[Firebase] Error getting all chat messages: $e');
+      Log.d('[Firebase] Error getting all chat messages: $e');
       return [];
     }
   }
@@ -534,10 +676,10 @@ class FirebaseService extends ChangeNotifier {
         'userId': _user!.uid,
         'syncedAt': FieldValue.serverTimestamp(),
       });
-      debugPrint('[Firebase] ✅ Saved chat message: ${message['id']}');
+      Log.d('[Firebase] ✅ Saved chat message: ${message['id']}');
       return true;
     } catch (e) {
-      debugPrint('[Firebase] ❌ Error saving chat message: $e');
+      Log.d('[Firebase] ❌ Error saving chat message: $e');
       return false;
     }
   }
@@ -554,10 +696,10 @@ class FirebaseService extends ChangeNotifier {
           .get();
       
       final messages = snapshot.docs.map((doc) => doc.data()).toList();
-      debugPrint('[Firebase] 📥 Fetched ${messages.length} chat messages');
+      Log.d('[Firebase] 📥 Fetched ${messages.length} chat messages');
       return messages;
     } catch (e) {
-      debugPrint('[Firebase] ❌ Error fetching user chat messages: $e');
+      Log.d('[Firebase] ❌ Error fetching user chat messages: $e');
       return [];
     }
   }
@@ -572,7 +714,7 @@ class FirebaseService extends ChangeNotifier {
       if (success) syncedCount++;
     }
     
-    debugPrint('[Firebase] 🔄 Synced $syncedCount/${pendingMessages.length} messages');
+    Log.d('[Firebase] 🔄 Synced $syncedCount/${pendingMessages.length} messages');
     return syncedCount;
   }
 
@@ -587,10 +729,10 @@ class FirebaseService extends ChangeNotifier {
           .doc(messageId)
           .delete();
       
-      debugPrint('[Firebase] 🗑️ Deleted message: $messageId');
+      Log.d('[Firebase] 🗑️ Deleted message: $messageId');
       return true;
     } catch (e) {
-      debugPrint('[Firebase] ❌ Error deleting message: $e');
+      Log.d('[Firebase] ❌ Error deleting message: $e');
       return false;
     }
   }
@@ -611,10 +753,10 @@ class FirebaseService extends ChangeNotifier {
       }
       await batch.commit();
       
-      debugPrint('[Firebase] 🗑️ Cleared all user chat messages');
+      Log.d('[Firebase] 🗑️ Cleared all user chat messages');
       return true;
     } catch (e) {
-      debugPrint('[Firebase] ❌ Error clearing chat messages: $e');
+      Log.d('[Firebase] ❌ Error clearing chat messages: $e');
       return false;
     }
   }

@@ -1,4 +1,4 @@
-// lib/ui/friend_chat_screen.dart
+﻿// lib/ui/friend_chat_screen.dart
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -9,7 +9,9 @@ import '../core/friend_models.dart';
 import '../core/chat_models.dart';
 import '../core/app_state.dart';
 import '../core/friend_service.dart';
+import '../cloud/firebase_service.dart';
 import '../widgets/message_status_icon.dart';
+import 'package:offgrid_sos/core/logger.dart';
 
 class FriendChatScreen extends StatefulWidget {
   final Friend friend;
@@ -30,28 +32,48 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
   String _searchQuery = '';
   bool _showSearchBar = false; // 🔍 สถานะแสดง/ซ่อนแถบค้นหา
   int _messageCount = 0; // ⚡ ติดตามจำนวนข้อความเพื่อ rebuild
+  bool _listenerStarted = false; // ป้องกัน start listener ซ้ำ
 
   @override
   void initState() {
     super.initState();
     _loadMessages();
     _markMessagesAsRead();
-    
-    // 🔥 Auto refresh ทุก 5 วินาที เพื่อดึงข้อความใหม่
-    _startAutoRefresh();
-    
+
     // ⚡ ฟังการเปลี่ยนแปลงของ friendChats เพื่อ rebuild
     appState.addListener(_onMessagesChanged);
+
+    // แจ้ง AppState ว่าผู้ใช้เปิดห้องแชทนี้อยู่ → suppress notification ซ้ำซ้อน
+    appState.setActiveFriendChat(widget.friend.userId);
+
+    // เริ่ม real-time Firestore listener (เมื่อ online) แทน polling
+    // ถ้าออฟไลน์ fallback ไป auto-refresh ทุก 30 วินาทีแทน
+    _startRealTimeOrFallback();
+
+    // ฟัง connectivity เพื่อ upgrade fallback timer → real-time listener เมื่อเน็ตกลับมา
+    firebaseService.addListener(_onConnectivityChanged);
   }
 
   @override
   void dispose() {
+    appState.setActiveFriendChat(null);
+    appState.stopFriendChatListener(widget.friend.userId);
     appState.removeListener(_onMessagesChanged);
+    firebaseService.removeListener(_onConnectivityChanged);
     _messageController.dispose();
     _scrollController.dispose();
     _searchController.dispose();
     _autoRefreshTimer?.cancel();
     super.dispose();
+  }
+
+  void _onConnectivityChanged() {
+    // upgrade: offline timer → real-time listener เมื่อเน็ตกลับมา
+    if (firebaseService.isOnline && firebaseService.isSignedIn && _autoRefreshTimer != null) {
+      _autoRefreshTimer!.cancel();
+      _autoRefreshTimer = null;
+      appState.startFriendChatListener(widget.friend.userId);
+    }
   }
 
   // ⚡ Callback เมื่อมีข้อความใหม่
@@ -66,14 +88,28 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
     }
   }
 
+  // widget.friend คือ snapshot ตอนเปิดหน้านี้ ไม่อัปเดตเองเมื่อ friendService
+  // ได้รับสถานะออนไลน์ใหม่ ต้อง lookup จาก live list ทุกครั้งที่จะแสดงสถานะ
+  Friend get _liveFriend => friendService.friends.firstWhere(
+        (f) => f.userId == widget.friend.userId,
+        orElse: () => widget.friend,
+      );
+
   Timer? _autoRefreshTimer;
 
-  void _startAutoRefresh() {
-    _autoRefreshTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
-      if (mounted) {
-        _refresh(silent: true); // silent = ไม่แสดง loading indicator
-      }
-    });
+  void _startRealTimeOrFallback() {
+    if (_listenerStarted) return;
+    _listenerStarted = true;
+
+    // ถ้าออนไลน์ → ใช้ Firestore real-time listener (รับข้อความทันที ไม่ poll)
+    if (firebaseService.isOnline && firebaseService.isSignedIn) {
+      appState.startFriendChatListener(widget.friend.userId);
+    } else {
+      // ออฟไลน์ → fallback polling ทุก 30 วินาที (ลดจาก 5 เพื่อประหยัดแบต)
+      _autoRefreshTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+        if (mounted) _refresh(silent: true);
+      });
+    }
   }
 
   Future<void> _refresh({bool silent = false}) async {
@@ -108,9 +144,9 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
 
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
+      if (_scrollController.hasClients && _scrollController.offset > 0) {
         _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
+          0,
           duration: const Duration(milliseconds: 300),
           curve: Curves.easeOut,
         );
@@ -273,20 +309,14 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
         );
       }
 
-      // ส่งรูปผ่าน P2P (ถ้าอยู่ใกล้กัน)
-      // TODO: ตรวจสอบว่า friend อยู่ใน nearby peers หรือไม่
-      // ถ้าอยู่ → ส่งผ่าน transport.sendFile()
-      // ถ้าไม่อยู่ → บันทึก metadata อย่างเดียว (ไม่อัพโหลด Firebase Storage)
-      
-      // ตอนนี้: บันทึก local อย่างเดียว + แสดง metadata
       await appState.sendFriendImageMessage(
-        widget.friend.userId, 
+        widget.friend.userId,
         imageFile.path,
       );
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('✅ ส่งรูปภาพสำเร็จ (P2P/Local)')),
+          const SnackBar(content: Text('✅ ส่งรูปภาพสำเร็จ')),
         );
       }
 
@@ -311,20 +341,14 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
         );
       }
 
-      // ส่งวิดีโอผ่าน P2P (ถ้าอยู่ใกล้กัน)
-      // TODO: ตรวจสอบว่า friend อยู่ใน nearby peers หรือไม่
-      // ถ้าอยู่ → ส่งผ่าน transport.sendFile()
-      // ถ้าไม่อยู่ → บันทึก metadata อย่างเดียว (ไม่อัพโหลด Firebase Storage)
-      
-      // ตอนนี้: บันทึก local อย่างเดียว + แสดง metadata
       await appState.sendFriendVideoMessage(
-        widget.friend.userId, 
+        widget.friend.userId,
         videoFile.path,
       );
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('✅ ส่งวิดีโอสำเร็จ (P2P/Local)')),
+          const SnackBar(content: Text('✅ ส่งวิดีโอสำเร็จ')),
         );
       }
 
@@ -378,22 +402,28 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
                       fontWeight: FontWeight.bold,
                     ),
                   ),
-                  Row(
-                    children: [
-                      Icon(
-                        widget.friend.isOnline ? Icons.circle : Icons.circle_outlined,
-                        size: 8,
-                        color: widget.friend.isOnline ? Colors.green : Colors.grey,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        widget.friend.isOnline ? 'ออนไลน์' : 'ออฟไลน์',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: widget.friend.isOnline ? Colors.green : Colors.grey,
-                        ),
-                      ),
-                    ],
+                  AnimatedBuilder(
+                    animation: friendService,
+                    builder: (context, _) {
+                      final isOnline = _liveFriend.isOnline;
+                      return Row(
+                        children: [
+                          Icon(
+                            isOnline ? Icons.circle : Icons.circle_outlined,
+                            size: 8,
+                            color: isOnline ? Colors.green : Colors.grey,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            isOnline ? 'ออนไลน์' : 'ออฟไลน์',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: isOnline ? Colors.green : Colors.grey,
+                            ),
+                          ),
+                        ],
+                      );
+                    },
                   ),
                 ],
               ),
@@ -572,15 +602,17 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
         return ListView.builder(
           key: ValueKey('messages_${_messageCount}_${messages.length}'),
           controller: _scrollController,
+          reverse: true,
           padding: const EdgeInsets.all(16),
           itemCount: messages.length,
           itemBuilder: (context, index) {
-            final message = messages[index];
+            final message = messages[messages.length - 1 - index];
             final isFromMe = message.fromUserId == friendService.currentUser?.id;
-            
+
             return _MessageBubble(
               message: message,
               isFromMe: isFromMe,
+              isPending: isFromMe && appState.pendingFriendSyncIds.contains(message.id),
               friendName: widget.friend.name,
               onOpenUrl: _openUrl,
             );
@@ -695,14 +727,6 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
                 maxLines: null,
                 textInputAction: TextInputAction.send,
                 onSubmitted: (_) => _sendMessage(),
-                onTap: () {
-                  // Debug: แสดงว่า TextField ถูกแตะ
-                  print('📝 TextField tapped!');
-                },
-                onChanged: (text) {
-                  // Debug: แสดงว่า text กำลังเปลี่ยน
-                  print('✍️ Text changed: $text');
-                },
               ),
             ),
             const SizedBox(width: 8),
@@ -730,19 +754,31 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('ล้างแชท'),
-        content: Text('คุณต้องการล้างประวัติแชทกับ ${widget.friend.name} หรือไม่?'),
+        content: Text(
+          'คุณต้องการล้างประวัติแชทกับ ${widget.friend.name} ทั้งหมดหรือไม่?\n\nการกระทำนี้ไม่สามารถย้อนกลับได้',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('ยกเลิก'),
           ),
           TextButton(
-            onPressed: () {
+            onPressed: () async {
               Navigator.pop(context);
-              // TODO: Implement clear chat functionality
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('ฟีเจอร์นี้จะพัฒนาในเวอร์ชันต่อไป')),
-              );
+              try {
+                await appState.clearFriendChat(widget.friend.userId);
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('✅ ล้างประวัติแชทเรียบร้อย')),
+                  );
+                }
+              } catch (e) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('❌ ล้างแชทไม่สำเร็จ: $e')),
+                  );
+                }
+              }
             },
             child: const Text('ล้าง', style: TextStyle(color: Colors.red)),
           ),
@@ -762,7 +798,7 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
           children: [
             Text('ชื่อ: ${widget.friend.name}'),
             Text('User ID: ${widget.friend.userId}'),
-            Text('สถานะ: ${widget.friend.isOnline ? "ออนไลน์" : "ออฟไลน์"}'),
+            Text('สถานะ: ${_liveFriend.isOnline ? "ออนไลน์" : "ออฟไลน์"}'),
             Text('เพิ่มเพื่อนเมื่อ: ${_formatDate(widget.friend.addedAt)}'),
             Text('เห็นครั้งล่าสุด: ${_formatDate(widget.friend.lastSeen)}'),
           ],
@@ -785,12 +821,14 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
 class _MessageBubble extends StatelessWidget {
   final FriendChatMessage message;
   final bool isFromMe;
+  final bool isPending;
   final String friendName;
   final Function(String)? onOpenUrl;
 
   const _MessageBubble({
     required this.message,
     required this.isFromMe,
+    required this.isPending,
     required this.friendName,
     this.onOpenUrl,
   });
@@ -965,12 +1003,13 @@ class _MessageBubble extends StatelessWidget {
                       if (isFromMe) ...[
                         const SizedBox(width: 4),
                         MessageStatusIcon(
-                          // แปลง isDelivered/isRead เป็น MessageStatus
-                          status: message.isRead 
-                              ? MessageStatus.synced  // อ่านแล้ว = ซิงก์แล้ว
-                              : message.isDelivered 
-                                  ? MessageStatus.delivered  // ส่งถึงแล้ว
-                                  : MessageStatus.sent,  // ส่งแล้ว
+                          status: isPending
+                              ? MessageStatus.pending
+                              : message.isRead
+                                  ? MessageStatus.synced
+                                  : message.isDelivered
+                                      ? MessageStatus.delivered
+                                      : MessageStatus.sent,
                           size: 12,
                         ),
                       ],
@@ -999,8 +1038,6 @@ class _MessageBubble extends StatelessWidget {
   }
 }
 
-/// 📊 Widget แสดงสถานะข้อความสำหรับ Friend Chat
-//  Video Player Widget - ???????????????
 class _VideoPlayerWidget extends StatefulWidget {
   final String videoPath;
 
@@ -1031,7 +1068,7 @@ class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
         });
       }
     } catch (e) {
-      print(' Error initializing video: $e');
+      Log.d(' Error initializing video: $e');
       if (mounted) {
         setState(() {
           _hasError = true;
@@ -1061,7 +1098,7 @@ class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
           children: [
             Icon(Icons.error_outline, color: Colors.red, size: 32),
             SizedBox(height: 8),
-            Text('??????????????????????', style: TextStyle(fontSize: 12)),
+            Text('ไม่สามารถโหลดวิดีโอได้', style: TextStyle(fontSize: 12)),
           ],
         ),
       );

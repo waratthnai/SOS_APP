@@ -79,6 +79,7 @@ class MainActivity: FlutterActivity() {
                 }
                 "discoverPeers" -> wifiDirectChannel.discoverPeers(call, result)
                 "sendMessage" -> wifiDirectChannel.sendMessage(call, result)
+                "sendFile" -> wifiDirectChannel.sendFile(call, result)
                 "stopDiscovery" -> wifiDirectChannel.stopDiscovery(call, result)
                 else -> result.notImplemented()
             }

@@ -1,5 +1,6 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import '../core/notification_service.dart';
+import 'package:offgrid_sos/core/logger.dart';
 
 /// แสดงการแจ้งเตือนแบบ floating ที่มุมบนขวา (เหมือน chat heads)
 class FloatingNotificationOverlay extends StatefulWidget {
@@ -51,12 +52,12 @@ class _FloatingNotificationOverlayState extends State<FloatingNotificationOverla
   void _onNotificationChanged() {
     final notifications = NotificationService().inAppNotifications;
     
-    debugPrint('🔔 [FloatingNotification] Notification changed: ${notifications.length} total');
+    Log.d('🔔 [FloatingNotification] Notification changed: ${notifications.length} total');
     
     if (notifications.isEmpty) {
       // ไม่มี notification → ซ่อน
       if (_currentNotification != null) {
-        debugPrint('🔔 [FloatingNotification] Hiding notification');
+        Log.d('🔔 [FloatingNotification] Hiding notification');
         _animationController?.reverse().then((_) {
           if (mounted) {
             setState(() {
@@ -68,9 +69,9 @@ class _FloatingNotificationOverlayState extends State<FloatingNotificationOverla
     } else {
       // มี notification ใหม่ → แสดง
       final latest = notifications.first;
-      debugPrint('🔔 [FloatingNotification] Latest: ${latest.title} - ${latest.message}');
+      Log.d('🔔 [FloatingNotification] Latest: ${latest.title} - ${latest.message}');
       if (_currentNotification?.id != latest.id) {
-        debugPrint('🔔 [FloatingNotification] Showing new notification');
+        Log.d('🔔 [FloatingNotification] Showing new notification');
         setState(() {
           _currentNotification = latest;
         });
@@ -80,7 +81,7 @@ class _FloatingNotificationOverlayState extends State<FloatingNotificationOverla
         if (latest.type != NotificationType.emergency) {
           Future.delayed(const Duration(seconds: 5), () {
             if (mounted && _currentNotification?.id == latest.id) {
-              debugPrint('🔔 [FloatingNotification] Auto-hiding notification');
+              Log.d('🔔 [FloatingNotification] Auto-hiding notification');
               _animationController?.reverse().then((_) {
                 if (mounted) {
                   setState(() {

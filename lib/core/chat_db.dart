@@ -1,6 +1,7 @@
-import 'package:sqflite/sqflite.dart';
+﻿import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'chat_models.dart';
+import 'package:offgrid_sos/core/logger.dart';
 
 class ChatDB {
   static Database? _db;
@@ -16,7 +17,7 @@ class ChatDB {
     final path = join(dbPath, 'chat.db');
     return await openDatabase(
       path,
-      version: 4, // เพิ่ม version เพื่อสร้าง peers table
+      version: 5, // เพิ่ม version เพื่อเพิ่ม is_read column
       onCreate: (db, v) async {
         // ตาราง chat_messages
         await db.execute('''
@@ -30,7 +31,8 @@ class ChatDB {
             filePath TEXT,
             time INTEGER NOT NULL,
             status TEXT DEFAULT 'sent',
-            isEmergency INTEGER DEFAULT 0
+            isEmergency INTEGER DEFAULT 0,
+            is_read INTEGER DEFAULT 1
           )
         ''');
         // ตาราง peers - เก็บชื่ออุปกรณ์
@@ -61,19 +63,19 @@ class ChatDB {
             await db.execute('ALTER TABLE chat_messages ADD COLUMN status TEXT DEFAULT "sent"');
           } catch (e) {
             // Column อาจมีอยู่แล้ว ข้ามไป
-            print('Column status already exists: $e');
+            Log.d('Column status already exists: $e');
           }
           try {
             await db.execute('ALTER TABLE chat_messages ADD COLUMN isEmergency INTEGER DEFAULT 0');
           } catch (e) {
             // Column อาจมีอยู่แล้ว ข้ามไป
-            print('Column isEmergency already exists: $e');
+            Log.d('Column isEmergency already exists: $e');
           }
           try {
             await db.execute('CREATE INDEX idx_status ON chat_messages(status)');
           } catch (e) {
             // Index อาจมีอยู่แล้ว ข้ามไป
-            print('Index idx_status already exists: $e');
+            Log.d('Index idx_status already exists: $e');
           }
         }
         if (oldVersion < 4) {
@@ -87,7 +89,15 @@ class ChatDB {
               )
             ''');
           } catch (e) {
-            print('Table peers already exists: $e');
+            Log.d('Table peers already exists: $e');
+          }
+        }
+        if (oldVersion < 5) {
+          // อัปเกรดจาก version 4 เป็น 5 (เพิ่ม is_read สำหรับนับ unread)
+          try {
+            await db.execute('ALTER TABLE chat_messages ADD COLUMN is_read INTEGER DEFAULT 1');
+          } catch (e) {
+            Log.d('Column is_read already exists: $e');
           }
         }
       },
@@ -135,6 +145,7 @@ class ChatDB {
         'time': m.time.millisecondsSinceEpoch,
         'status': m.status.name,
         'isEmergency': m.isEmergency ? 1 : 0,
+        'is_read': m.isRead ? 1 : 0,
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
@@ -197,6 +208,7 @@ class ChatDB {
         time: DateTime.fromMillisecondsSinceEpoch(m['time'] as int),
         status: status,
         isEmergency: (m['isEmergency'] as int?) == 1,
+        isRead: (m['is_read'] as int?) != 0,
       );
     }).toList();
   }
@@ -225,6 +237,17 @@ class ChatDB {
     return _mapsToChatMessages(maps);
   }
 
+  /// ทำเครื่องหมายข้อความที่ peer ส่งมาว่าอ่านแล้ว (เรียกตอนเปิดห้องแชท)
+  static Future<void> markConversationRead(String userId, String peerId) async {
+    final database = await db;
+    await database.update(
+      'chat_messages',
+      {'is_read': 1},
+      where: 'user_id = ? AND sender = ? AND is_read = 0',
+      whereArgs: [userId, peerId],
+    );
+  }
+
   // ลบข้อความทั้งหมดของ user (ตอน logout)
   /// ลบการสนทนาทั้งหมดกับ peer คนหนึ่ง
   static Future<void> deleteConversation(String userId, String peerId) async {
@@ -244,7 +267,7 @@ class ChatDB {
       where: 'id = ?',
       whereArgs: [messageId],
     );
-    print('[ChatDB] 🗑️ Deleted message: $messageId');
+    Log.d('[ChatDB] 🗑️ Deleted message: $messageId');
   }
 
   static Future<void> clearUserMessages(String userId) async {
@@ -266,7 +289,7 @@ class ChatDB {
       whereArgs: ['anonymous'],
     );
     if (count > 0) {
-      print('[ChatDB] 🔄 Migrated $count anonymous messages to user $newUserId');
+      Log.d('[ChatDB] 🔄 Migrated $count anonymous messages to user $newUserId');
     }
   }
 }

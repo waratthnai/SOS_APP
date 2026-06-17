@@ -1,8 +1,9 @@
-// lib/ui/debug_screen.dart
+﻿// lib/ui/debug_screen.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../core/friend_service.dart';
 import '../cloud/firebase_service.dart';
+import 'package:offgrid_sos/core/logger.dart';
 
 class DebugScreen extends StatelessWidget {
   const DebugScreen({super.key});
@@ -139,9 +140,9 @@ class DebugScreen extends StatelessWidget {
                 ElevatedButton.icon(
                   onPressed: () async {
                     // ตรวจสอบข้อมูลเพื่อนจาก Firebase โดยตรง
-                    debugPrint('🔍 [Debug] กำลังตรวจสอบข้อมูลเพื่อนใน Firebase...');
+                    Log.d('🔍 [Debug] กำลังตรวจสอบข้อมูลเพื่อนใน Firebase...');
                     final friends = await firebaseService.getUserFriends(user.id);
-                    debugPrint('📊 [Debug] ผลลัพธ์: พบ ${friends.length} เพื่อนใน Firebase');
+                    Log.d('📊 [Debug] ผลลัพธ์: พบ ${friends.length} เพื่อนใน Firebase');
                     
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(

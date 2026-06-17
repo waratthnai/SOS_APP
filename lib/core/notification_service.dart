@@ -1,4 +1,5 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
+import 'package:offgrid_sos/core/logger.dart';
 
 class NotificationService extends ChangeNotifier {
   static final NotificationService _instance = NotificationService._internal();
@@ -20,7 +21,7 @@ class NotificationService extends ChangeNotifier {
     String? senderId,
     VoidCallback? onReply,
   }) {
-    debugPrint('🔔 showInAppNotification เรียก: title=$title, type=$type');
+    Log.d('🔔 showInAppNotification เรียก: title=$title, type=$type');
     final notification = InAppNotification(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       title: title,
@@ -32,14 +33,14 @@ class NotificationService extends ChangeNotifier {
     );
 
     _inAppNotifications.insert(0, notification);
-    debugPrint('🔔 เพิ่มการแจ้งเตือนแล้ว ID: ${notification.id}');
+    Log.d('🔔 เพิ่มการแจ้งเตือนแล้ว ID: ${notification.id}');
     
     if (_inAppNotifications.length > 20) {
       _inAppNotifications.removeLast();
     }
 
     notifyListeners();
-    debugPrint('🔔 notifyListeners() เรียกแล้ว, จำนวนการแจ้งเตือน: ${_inAppNotifications.length}');
+    Log.d('🔔 notifyListeners() เรียกแล้ว, จำนวนการแจ้งเตือน: ${_inAppNotifications.length}');
   }
 
   void clearNotification(String id) {
@@ -69,7 +70,7 @@ class NotificationService extends ChangeNotifier {
   }
 
   void showMessageNotification(String senderName, String message, {String? senderId, VoidCallback? onReply}) {
-    debugPrint('🔔 showMessageNotification เรียก: senderName=$senderName, message=$message, senderId=$senderId, onReply=${onReply != null}');
+    Log.d('🔔 showMessageNotification เรียก: senderName=$senderName, message=$message, senderId=$senderId, onReply=${onReply != null}');
     showInAppNotification(
       title: '💬 New Message',
       message: '$senderName: $message',
@@ -77,7 +78,7 @@ class NotificationService extends ChangeNotifier {
       senderId: senderId,
       onReply: onReply,
     );
-    debugPrint('🔔 จำนวนการแจ้งเตือนปัจจุบัน: ${_inAppNotifications.length}');
+    Log.d('🔔 จำนวนการแจ้งเตือนปัจจุบัน: ${_inAppNotifications.length}');
   }
 }
 

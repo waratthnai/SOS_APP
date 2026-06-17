@@ -1,9 +1,10 @@
-// lib/core/message_queue_service.dart
+﻿// lib/core/message_queue_service.dart
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'chat_models.dart';
+import 'package:offgrid_sos/core/logger.dart';
 
 /// Service จัดการคิวข้อความที่รอส่ง และซิงก์ขึ้น Cloud
 class MessageQueueService extends ChangeNotifier {
@@ -24,7 +25,21 @@ class MessageQueueService extends ChangeNotifier {
   // Timer สำหรับ retry
   Timer? _retryTimer;
   Timer? _syncTimer;
-  
+
+  // Handler ที่ต้องตั้งจากภายนอก (AppState) เพื่อไม่ให้ service นี้ผูกกับ Transport/Firebase ตรงๆ
+  Future<bool> Function(ChatMessage message)? _sendHandler;
+  Future<bool> Function(ChatMessage message)? _syncHandler;
+
+  /// ตั้ง handler สำหรับส่งข้อความจริงผ่าน Transport
+  void setSendHandler(Future<bool> Function(ChatMessage message) handler) {
+    _sendHandler = handler;
+  }
+
+  /// ตั้ง handler สำหรับซิงก์ข้อความขึ้น Cloud จริง
+  void setSyncHandler(Future<bool> Function(ChatMessage message) handler) {
+    _syncHandler = handler;
+  }
+
   // Getters
   List<ChatMessage> get pendingQueue => List.unmodifiable(_pendingQueue);
   List<ChatMessage> get syncQueue => List.unmodifiable(_syncQueue);
@@ -63,9 +78,9 @@ class MessageQueueService extends ChangeNotifier {
         );
       }
       
-      debugPrint('📦 โหลดคิวข้อความ: ${_pendingQueue.length} รอส่ง, ${_syncQueue.length} รอซิงก์');
+      Log.d('📦 โหลดคิวข้อความ: ${_pendingQueue.length} รอส่ง, ${_syncQueue.length} รอซิงก์');
     } catch (e) {
-      debugPrint('❌ โหลดคิวไม่สำเร็จ: $e');
+      Log.d('❌ โหลดคิวไม่สำเร็จ: $e');
     }
   }
   
@@ -86,9 +101,9 @@ class MessageQueueService extends ChangeNotifier {
       );
       await prefs.setString('sync_messages', syncJson);
       
-      debugPrint('💾 บันทึกคิวข้อความแล้ว');
+      Log.d('💾 บันทึกคิวข้อความแล้ว');
     } catch (e) {
-      debugPrint('❌ บันทึกคิวไม่สำเร็จ: $e');
+      Log.d('❌ บันทึกคิวไม่สำเร็จ: $e');
     }
   }
   
@@ -97,7 +112,7 @@ class MessageQueueService extends ChangeNotifier {
     _pendingQueue.add(message.copyWith(status: MessageStatus.pending));
     await _saveQueuesToStorage();
     notifyListeners();
-    debugPrint('📥 เพิ่มข้อความเข้าคิว: ${message.id}');
+    Log.d('📥 เพิ่มข้อความเข้าคิว: ${message.id}');
   }
   
   /// เพิ่มข้อความเข้าคิวซิงก์ (เมื่อส่ง P2P สำเร็จแล้ว)
@@ -109,7 +124,7 @@ class MessageQueueService extends ChangeNotifier {
     _syncQueue.add(message.copyWith(status: MessageStatus.sent));
     await _saveQueuesToStorage();
     notifyListeners();
-    debugPrint('📤 เพิ่มข้อความเข้าคิวซิงก์: ${message.id}');
+    Log.d('📤 เพิ่มข้อความเข้าคิวซิงก์: ${message.id}');
   }
   
   /// ลบข้อความออกจากคิว (เมื่อซิงก์สำเร็จแล้ว)
@@ -117,7 +132,7 @@ class MessageQueueService extends ChangeNotifier {
     _syncQueue.removeWhere((m) => m.id == messageId);
     await _saveQueuesToStorage();
     notifyListeners();
-    debugPrint('✅ ลบข้อความออกจากคิวซิงก์: $messageId');
+    Log.d('✅ ลบข้อความออกจากคิวซิงก์: $messageId');
   }
   
   /// อัพเดทสถานะการเชื่อมต่อ P2P
@@ -126,7 +141,7 @@ class MessageQueueService extends ChangeNotifier {
     notifyListeners();
     
     if (connected && _pendingQueue.isNotEmpty) {
-      debugPrint('🔄 เชื่อมต่อ P2P แล้ว - พยายามส่งข้อความที่ค้างอยู่');
+      Log.d('🔄 เชื่อมต่อ P2P แล้ว - พยายามส่งข้อความที่ค้างอยู่');
       _retryPendingMessages();
     }
   }
@@ -137,7 +152,7 @@ class MessageQueueService extends ChangeNotifier {
     notifyListeners();
     
     if (online && _syncQueue.isNotEmpty) {
-      debugPrint('🌐 ออนไลน์แล้ว - พยายามซิงก์ข้อความ');
+      Log.d('🌐 ออนไลน์แล้ว - พยายามซิงก์ข้อความ');
       _syncToCloud();
     }
   }
@@ -162,35 +177,64 @@ class MessageQueueService extends ChangeNotifier {
     });
   }
   
-  /// พยายามส่งข้อความที่ค้างอยู่ใหม่
-  Future<void> _retryPendingMessages() async {
-    if (_pendingQueue.isEmpty) return;
-    
-    debugPrint('🔄 กำลัง retry ส่งข้อความ ${_pendingQueue.length} ข้อความ...');
-    
-    // TODO: ต้องเชื่อมกับ Transport Service เพื่อส่งข้อความจริงๆ
-    // ตอนนี้จะแค่ log ไว้
-    for (final msg in List.from(_pendingQueue)) {
-      debugPrint('📤 Retry: ${msg.id} - ${msg.text}');
-      // เมื่อส่งสำเร็จแล้วให้เรียก:
-      // await addToSyncQueue(msg);
+  /// retry ข้อความชิ้นเดียวจาก messageId (ใช้จาก UI)
+  Future<void> retryMessage(String messageId) async {
+    if (_sendHandler == null) return;
+    final msg = _pendingQueue.cast<ChatMessage?>().firstWhere(
+      (m) => m?.id == messageId,
+      orElse: () => null,
+    );
+    if (msg == null) return;
+    try {
+      final success = await _sendHandler!(msg);
+      if (success) {
+        Log.d('✅ Retry สำเร็จ: ${msg.id}');
+        await addToSyncQueue(msg);
+      }
+    } catch (e) {
+      Log.d('❌ Retry error: ${msg.id} - $e');
     }
   }
-  
+
+  /// พยายามส่งข้อความที่ค้างอยู่ใหม่
+  Future<void> _retryPendingMessages() async {
+    if (_pendingQueue.isEmpty || _sendHandler == null) return;
+
+    Log.d('🔄 กำลัง retry ส่งข้อความ ${_pendingQueue.length} ข้อความ...');
+
+    for (final msg in List.from(_pendingQueue)) {
+      try {
+        final success = await _sendHandler!(msg);
+        if (success) {
+          Log.d('✅ Retry สำเร็จ: ${msg.id}');
+          await addToSyncQueue(msg);
+        } else {
+          Log.d('❌ Retry ไม่สำเร็จ: ${msg.id}');
+        }
+      } catch (e) {
+        Log.d('❌ Retry error: ${msg.id} - $e');
+      }
+    }
+  }
+
   /// ซิงก์ข้อความขึ้น Cloud
   Future<void> _syncToCloud() async {
-    if (_syncQueue.isEmpty) return;
-    
-    debugPrint('☁️ กำลังซิงก์ข้อความขึ้น Cloud ${_syncQueue.length} ข้อความ...');
-    
-    // TODO: ต้องเชื่อมกับ Firebase Service เพื่อซิงก์จริงๆ
-    // ตอนนี้จะแค่ log ไว้
+    if (_syncQueue.isEmpty || _syncHandler == null) return;
+
+    Log.d('☁️ กำลังซิงก์ข้อความขึ้น Cloud ${_syncQueue.length} ข้อความ...');
+
     for (final msg in List.from(_syncQueue)) {
-      debugPrint('☁️ Sync: ${msg.id} - ${msg.text}');
-      // เมื่อซิงก์สำเร็จแล้วให้เรียก:
-      // await removeFromSyncQueue(msg.id);
-      // และอัพเดทสถานะใน Database:
-      // await ChatDB.updateMessageStatus(msg.id, MessageStatus.synced);
+      try {
+        final success = await _syncHandler!(msg);
+        if (success) {
+          Log.d('✅ ซิงก์สำเร็จ: ${msg.id}');
+          await removeFromSyncQueue(msg.id);
+        } else {
+          Log.d('❌ ซิงก์ไม่สำเร็จ: ${msg.id}');
+        }
+      } catch (e) {
+        Log.d('❌ Sync error: ${msg.id} - $e');
+      }
     }
   }
   
@@ -213,7 +257,7 @@ class MessageQueueService extends ChangeNotifier {
     _syncQueue.clear();
     await _saveQueuesToStorage();
     notifyListeners();
-    debugPrint('🗑️ ล้างคิวข้อความทั้งหมดแล้ว');
+    Log.d('🗑️ ล้างคิวข้อความทั้งหมดแล้ว');
   }
   
   /// ทำลาย Service

@@ -45,5 +45,54 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+
+	<!-- ─── Bluetooth (BLE Transport) ─── -->
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>แอปใช้ Bluetooth เพื่อสื่อสารกับอุปกรณ์ใกล้เคียงในสถานการณ์ฉุกเฉินแบบออฟไลน์</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>แอปใช้ Bluetooth เพื่อสื่อสารกับอุปกรณ์ใกล้เคียงในสถานการณ์ฉุกเฉินแบบออฟไลน์</string>
+
+	<!-- ─── Location (GPS + SOS Broadcast) ─── -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>แอปใช้ตำแหน่งของคุณเพื่อแนบพิกัดไปกับสัญญาณ SOS และแสดงบนแผนที่</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>แอปใช้ตำแหน่งของคุณขณะทำงานเบื้องหลังเพื่อส่งสัญญาณ SOS ได้ตลอดเวลา</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>แอปใช้ตำแหน่งของคุณขณะทำงานเบื้องหลังเพื่อส่งสัญญาณ SOS ได้ตลอดเวลา</string>
+
+	<!-- ─── Camera & Photo Library (Image/Video sharing) ─── -->
+	<key>NSCameraUsageDescription</key>
+	<string>แอปใช้กล้องเพื่อถ่ายรูปหรือวิดีโอแนบส่งในแชทฉุกเฉิน</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>แอปเข้าถึงคลังภาพเพื่อเลือกรูปหรือวิดีโอแนบส่งในแชทฉุกเฉิน</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>แอปบันทึกรูปหรือวิดีโอที่ได้รับลงในคลังภาพของคุณ</string>
+
+	<!-- ─── Microphone (Video recording) ─── -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>แอปใช้ไมโครโฟนเพื่อบันทึกเสียงขณะถ่ายวิดีโอ</string>
+
+	<!-- ─── Local Network & Bonjour (BLE + WiFi Direct discovery) ─── -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>แอปใช้เครือข่ายภายในเพื่อค้นหาและเชื่อมต่ออุปกรณ์ใกล้เคียงแบบออฟไลน์</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_offgrid-sos._tcp</string>
+		<string>_offgrid-sos._udp</string>
+	</array>
+
+	<!-- ─── Background Modes ─── -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>bluetooth-central</string>
+		<string>bluetooth-peripheral</string>
+		<string>location</string>
+		<string>fetch</string>
+		<string>remote-notification</string>
+	</array>
+
+	<!-- ─── Push Notifications (Firebase FCM) ─── -->
+	<key>FirebaseAppDelegateProxyEnabled</key>
+	<false/>
 </dict>
 </plist>

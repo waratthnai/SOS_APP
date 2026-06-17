@@ -5,7 +5,8 @@ class Peer {
   final String id;
   final String name;
   final bool nearby; // ไกล้/ไกล
-  const Peer({required this.id, required this.name, this.nearby = true});
+  final double? distance; // ระยะห่าง หน่วย เมตร
+  const Peer({required this.id, required this.name, this.nearby = true, this.distance});
 }
 
 /// ข้อความที่ส่ง-รับ
@@ -46,6 +47,9 @@ abstract class Transport {
 
   /// ข้อความที่เข้ามา
   Stream<Message> get onMessage;
+
+  /// ไฟล์ที่ได้รับ (รูปภาพ/วิดีโอ)
+  Stream<ReceivedFile> get onFileReceived;
 
   /// เริ่มค้นหาเพื่อนรอบๆ
   Future<void> startDiscovery();

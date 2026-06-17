@@ -9,6 +9,8 @@ class FriendDB {
   static const String _userProfileKey = 'user_profile';
   static const String _friendRequestsKey = 'friend_requests';
   static const String _friendChatsKey = 'friend_chats';
+  // key นี้ไม่ถูกลบตอน logout เพื่อให้จำสถานะ "อ่านแล้ว" ข้ามเซสชัน
+  static const String _lastReadKey = 'last_read';
 
   // ========== User Profile Management ==========
 
@@ -212,10 +214,16 @@ class FriendDB {
     if (existingData != null) {
       messages = jsonDecode(existingData);
     }
-    
-    // เพิ่มข้อความใหม่
-    messages.add(message);
-    
+
+    // กันข้อความซ้ำ: ถ้ามี id นี้อยู่แล้วให้แทนที่ ไม่ใช่เพิ่มใหม่
+    final newId = message['id'];
+    final existingIndex = messages.indexWhere((m) => m['id'] == newId);
+    if (existingIndex >= 0) {
+      messages[existingIndex] = message;
+    } else {
+      messages.add(message);
+    }
+
     // บันทึกกลับ
     await prefs.setString(key, jsonEncode(messages));
   }
@@ -230,6 +238,21 @@ class FriendDB {
       return messages.cast<Map<String, dynamic>>();
     }
     return [];
+  }
+
+  /// บันทึกเวลาที่อ่านล่าสุดของแชทกับเพื่อน (scoped ด้วย userId เพื่อกันข้ามบัญชี)
+  /// key นี้ไม่ถูกลบตอน logout เพื่อให้จำสถานะข้ามเซสชัน
+  static Future<void> setLastReadTime(String myUserId, String friendUserId, DateTime time) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('${_lastReadKey}_${myUserId}_$friendUserId', time.toIso8601String());
+  }
+
+  /// ดึงเวลาที่อ่านล่าสุดของแชทกับเพื่อน
+  static Future<DateTime?> getLastReadTime(String myUserId, String friendUserId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final value = prefs.getString('${_lastReadKey}_${myUserId}_$friendUserId');
+    if (value == null) return null;
+    return DateTime.tryParse(value);
   }
 
   /// ลบข้อความแชททั้งหมดกับเพื่อน

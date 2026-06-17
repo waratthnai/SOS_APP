@@ -1,6 +1,7 @@
-// lib/core/device_id_manager.dart
+﻿// lib/core/device_id_manager.dart
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
+import 'package:offgrid_sos/core/logger.dart';
 
 /// จัดการ Device ID ที่ไม่เปลี่ยนแปลง
 /// - ก่อน login: ใช้ Device ID ถาวร (UUID)
@@ -26,9 +27,9 @@ class DeviceIdManager {
       // สร้าง UUID ใหม่ และบันทึก
       deviceId = 'device_${_uuid.v4()}';
       await prefs.setString(_deviceIdKey, deviceId);
-      print('[DeviceId] 🆕 Created new device ID: $deviceId');
+      Log.d('[DeviceId] 🆕 Created new device ID: $deviceId');
     } else {
-      print('[DeviceId] 📱 Loaded existing device ID: $deviceId');
+      Log.d('[DeviceId] 📱 Loaded existing device ID: $deviceId');
     }
     
     _cachedDeviceId = deviceId;
@@ -39,9 +40,9 @@ class DeviceIdManager {
   static void setUserId(String? userId) {
     _cachedUserId = userId;
     if (userId != null) {
-      print('[DeviceId] 👤 User logged in: $userId');
+      Log.d('[DeviceId] 👤 User logged in: $userId');
     } else {
-      print('[DeviceId] 👤 User logged out - using device ID');
+      Log.d('[DeviceId] 👤 User logged out - using device ID');
     }
   }
   
@@ -62,6 +63,6 @@ class DeviceIdManager {
     await prefs.remove(_deviceIdKey);
     _cachedDeviceId = null;
     _cachedUserId = null;
-    print('[DeviceId] 🔄 Reset device ID');
+    Log.d('[DeviceId] 🔄 Reset device ID');
   }
 }

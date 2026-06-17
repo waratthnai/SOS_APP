@@ -1,7 +1,7 @@
-import 'dart:async';
-import 'package:flutter/foundation.dart';
+﻿import 'dart:async';
 import 'transport.dart';
 import 'nearby_transport.dart';
+import 'package:offgrid_sos/core/logger.dart';
 
 /// 📡 Radio Mesh Transport - Simulated Multi-Hop Network
 /// 
@@ -64,7 +64,7 @@ class MeshTransport implements Transport {
     _startRouteDiscovery();
     _startPeriodicScan(); // ✅ เปิดใช้งาน periodic scan เพื่อค้นหาอุปกรณ์ใหม่
     
-    debugPrint('📡 [MESH] Initialized for device: $deviceId');
+    Log.d('📡 [MESH] Initialized for device: $deviceId');
   }
 
   @override
@@ -76,12 +76,16 @@ class MeshTransport implements Transport {
   @override
   Stream<Message> get onMessage => _msgCtrl.stream;
 
+  /// ไฟล์รับได้แค่จาก direct peer ผ่าน base transport เท่านั้น (ยังไม่รองรับ multi-hop)
+  @override
+  Stream<ReceivedFile> get onFileReceived => _baseTransport.onFileReceived;
+
   @override
   Future<void> startDiscovery() async {
-    debugPrint('📡 [MESH] Starting mesh discovery...');
-    debugPrint('📡 [MESH] Device ID: $deviceId, Device Name: $deviceName');
+    Log.d('📡 [MESH] Starting mesh discovery...');
+    Log.d('📡 [MESH] Device ID: $deviceId, Device Name: $deviceName');
     await _baseTransport.startDiscovery();
-    debugPrint('📡 [MESH] Base transport discovery started');
+    Log.d('📡 [MESH] Base transport discovery started');
     
     // 🔧 ส่ง HELLO ทันทีเมื่อเริ่ม scan
     Future.delayed(const Duration(seconds: 2), () async {
@@ -94,16 +98,16 @@ class MeshTransport implements Transport {
         hops: [],
       );
       await _broadcastMeshMessage(helloMessage);
-      debugPrint('📡 [MESH] Initial HELLO sent with name=$deviceName');
+      Log.d('📡 [MESH] Initial HELLO sent with name=$deviceName');
     });
     
     _startRouteDiscovery();
-    debugPrint('📡 [MESH] Route discovery started');
+    Log.d('📡 [MESH] Route discovery started');
   }
 
   @override
   Future<void> stopDiscovery() async {
-    debugPrint('📡 [MESH] Stopping mesh discovery...');
+    Log.d('📡 [MESH] Stopping mesh discovery...');
     _routeDiscoveryTimer?.cancel();
     _scanTimer?.cancel(); // 🔍 หยุด periodic scanning
     await _baseTransport.stopDiscovery();
@@ -113,10 +117,9 @@ class MeshTransport implements Transport {
   }
 
   @override
-  @override
   Future<void> sendMessage(String body, {Peer? to}) async {
     final preview = body.length > 80 ? '${body.substring(0, 80)}...' : body;
-    debugPrint('📡 [MESH] sendMessage called: $preview');
+    Log.d('📡 [MESH] sendMessage called: $preview');
     
     // 🔧 ถ้าส่งให้ direct peer → ส่งแบบธรรมดา (ไม่ใช้ MESH: protocol)
     // 🔧 ถ้าเป็น mesh hop → ใช้ MESH: protocol
@@ -127,7 +130,7 @@ class MeshTransport implements Transport {
     if (isDirectBroadcast || isDirectPeer) {
       // ส่งแบบธรรมดา เหมือน Bluetooth เป๊ะ ๆ
       final targetName = to?.name ?? 'all';
-      debugPrint('📡 [MESH] Sending as plain message to $targetName (direct)');
+      Log.d('📡 [MESH] Sending as plain message to $targetName (direct)');
       await _baseTransport.sendMessage(body, to: to);
       
       // Echo back ข้อความของเราเอง
@@ -141,7 +144,7 @@ class MeshTransport implements Transport {
     }
     
     // เป็น mesh hop → ใช้ MESH: protocol
-    debugPrint('📡 [MESH] Using MESH protocol for multi-hop routing to ${to.name}');
+    Log.d('📡 [MESH] Using MESH protocol for multi-hop routing to ${to.name}');
     
     final messageId = _generateMessageId();
     final ttl = 5; // จำกัด 5 hops
@@ -160,7 +163,7 @@ class MeshTransport implements Transport {
     
     // Unicast via mesh
     final bodyPreview = body.length > 50 ? '${body.substring(0, 50)}...' : body;
-    debugPrint('📡 [MESH] Sending mesh message to ${to.name}: $bodyPreview');
+    Log.d('📡 [MESH] Sending mesh message to ${to.name}: $bodyPreview');
     await _sendMeshMessage(meshMessage);
     
     // Echo back ข้อความของเราเอง
@@ -175,7 +178,7 @@ class MeshTransport implements Transport {
   @override
   Future<void> sendFile(String filePath, {Peer? to}) async {
     // TODO: Implement mesh file transfer (ต้องแบ่งเป็น chunks)
-    debugPrint('⚠️ [MESH] File transfer not yet supported in mesh mode');
+    Log.d('⚠️ [MESH] File transfer not yet supported in mesh mode');
     throw UnimplementedError('Mesh file transfer requires chunking implementation');
   }
 
@@ -192,7 +195,7 @@ class MeshTransport implements Transport {
   // ========== Internal Methods ==========
 
   void _onDirectPeersChanged(List<Peer> peers) {
-    debugPrint('📡 [MESH] Peers updated: ${peers.length} direct peers');
+    Log.d('📡 [MESH] Peers updated: ${peers.length} direct peers');
     
     // อัปเดต routing table: direct peers มี next hop = ตัวมันเอง
     for (final peer in peers) {
@@ -211,7 +214,7 @@ class MeshTransport implements Transport {
       !currentIds.contains(peerId) && peerId != deviceId
     );
     
-    debugPrint('📡 [MESH] Routes: ${_routingTable.length}, emitting peers...');
+    Log.d('📡 [MESH] Routes: ${_routingTable.length}, emitting peers...');
     _emitPeers();
   }
 
@@ -224,7 +227,7 @@ class MeshTransport implements Transport {
         return;
       }
       
-      debugPrint('📡 [MESH] Parsing message: ${message.body.substring(0, message.body.length > 100 ? 100 : message.body.length)}...');
+      Log.d('📡 [MESH] Parsing message: ${message.body.substring(0, message.body.length > 100 ? 100 : message.body.length)}...');
       
       // Parse mesh message
       final meshMessage = _MeshMessage.fromEncoded(message.body);
@@ -234,17 +237,17 @@ class MeshTransport implements Transport {
         return str.length > maxLen ? str.substring(0, maxLen) : str;
       }
       
-      debugPrint('📡 [MESH] Parsed: id=${_safeSubstring(meshMessage.id, 20)}..., from=${_safeSubstring(meshMessage.from, 20)}..., to=${meshMessage.to}, ttl=${meshMessage.ttl}, hops=${meshMessage.hops.length}');
+      Log.d('📡 [MESH] Parsed: id=${_safeSubstring(meshMessage.id, 20)}..., from=${_safeSubstring(meshMessage.from, 20)}..., to=${meshMessage.to}, ttl=${meshMessage.ttl}, hops=${meshMessage.hops.length}');
       
       // 🔧 ป้องกันการ process message จากตัวเอง
       if (meshMessage.from == deviceId) {
-        debugPrint('📡 [MESH] Ignoring message from self (${_safeSubstring(deviceId, 20)}...)');
+        Log.d('📡 [MESH] Ignoring message from self (${_safeSubstring(deviceId, 20)}...)');
         return;
       }
       
       // ตรวจสอบว่าเคยได้รับข้อความนี้แล้วหรือไม่
       if (_messageHistory.containsKey(meshMessage.id)) {
-        debugPrint('📡 [MESH] Duplicate message ${_safeSubstring(meshMessage.id, 20)}... - ignored');
+        Log.d('📡 [MESH] Duplicate message ${_safeSubstring(meshMessage.id, 20)}... - ignored');
         return;
       }
       
@@ -263,46 +266,50 @@ class MeshTransport implements Transport {
         _routingTable[meshMessage.from] = previousHop;
         _allPeers.add(meshMessage.from);
         
-        debugPrint('📡 [MESH] Updated route: ${_safeSubstring(meshMessage.from, 20)}... via ${_safeSubstring(previousHop, 20)}...');
+        Log.d('📡 [MESH] Updated route: ${_safeSubstring(meshMessage.from, 20)}... via ${_safeSubstring(previousHop, 20)}...');
       } else if (!isFromDirectPeer) {
         // Direct message จาก peer ที่ไม่ได้เชื่อมตรงอยู่แล้ว
         _routingTable[meshMessage.from] = message.fromPeerId;
         _allPeers.add(meshMessage.from);
-        debugPrint('📡 [MESH] Direct message from: ${_safeSubstring(meshMessage.from, 20)}... via ${message.fromPeerId}');
+        Log.d('📡 [MESH] Direct message from: ${_safeSubstring(meshMessage.from, 20)}... via ${message.fromPeerId}');
       } else {
         // Direct message จาก peer ที่เชื่อมตรงอยู่แล้ว - แค่บันทึกชื่อ ไม่ต้องสร้าง route ใหม่
-        debugPrint('📡 [MESH] Message from known direct peer ${message.fromPeerId}, skipping route creation');
+        Log.d('📡 [MESH] Message from known direct peer ${message.fromPeerId}, skipping route creation');
       }
       
-      // ตรวจสอบว่าข้อความนี้ถึงเราหรือไม่
-      if (meshMessage.to == null || meshMessage.to == deviceId) {
+      // ตรวจสอบว่าข้อความนี้ถึงเราหรือไม่ (broadcast = ทุกคน "ถึง" ด้วย แต่ก็ต้อง forward ต่อด้วย)
+      final isForUs = meshMessage.to == null || meshMessage.to == deviceId;
+      // unicast ที่จบที่เรา (to == deviceId เป๊ะๆ) ไม่ต้อง forward ต่อ เพราะถึงปลายทางแล้ว
+      final isUnicastTerminal = meshMessage.to == deviceId;
+      // ข้อความที่ไม่ต้อง forward ต่อแม้ ttl > 0 (ออกแบบให้จำกัดวงแค่ direct neighbor)
+      var suppressForward = false;
+
+      if (isForUs) {
         // ข้อความถึงเรา (broadcast หรือ unicast)
-        debugPrint('📡 [MESH] ✅ Message for us from ${meshMessage.from}: ${meshMessage.body}');
-        
+        Log.d('📡 [MESH] ✅ Message for us from ${meshMessage.from}: ${meshMessage.body}');
+
         // 🔧 จัดการ HELLO message พิเศษ - บันทึก device name
         if (meshMessage.body.startsWith('HELLO:')) {
           final parts = meshMessage.body.split(':');
           if (parts.length >= 2) {
             final peerName = parts[1];
-            
+
             // 🔧 ถ้ามาจาก direct peer → บันทึกชื่อกับ Nearby ID แทน mesh device ID
             if (isFromDirectPeer) {
               _deviceNames[message.fromPeerId] = peerName;
-              debugPrint('📝 [MESH] Saved device name for direct peer: ${message.fromPeerId} = $peerName');
+              Log.d('📝 [MESH] Saved device name for direct peer: ${message.fromPeerId} = $peerName');
             } else {
               _deviceNames[meshMessage.from] = peerName;
-              debugPrint('📝 [MESH] Saved device name for mesh peer: ${meshMessage.from.substring(0, 8)}... = $peerName');
+              Log.d('📝 [MESH] Saved device name for mesh peer: ${meshMessage.from.substring(0, 8)}... = $peerName');
             }
           }
-          debugPrint('📡 [MESH] Control message filtered: HELLO');
+          Log.d('📡 [MESH] Control message filtered: HELLO');
           _emitPeers(); // อัปเดต peer list ด้วยชื่อใหม่
-          return;
-        }
-        
-        // 🔧 จัดการคำขอ PEER_LIST_REQUEST - ส่งรายชื่อ peers ที่เราเชื่อมต่ออยู่กลับไป
-        if (meshMessage.body == 'PEER_LIST_REQUEST') {
-          debugPrint('📡 [MESH] Received PEER_LIST_REQUEST from ${meshMessage.from.substring(0, 8)}...');
-          
+          // ไม่ return - ต้อง forward ต่อด้วย (HELLO ต้องกระจายหลาย hop เพื่อให้ค้นพบ peer ไกลๆ)
+        } else if (meshMessage.body == 'PEER_LIST_REQUEST') {
+          // 🔧 จัดการคำขอ PEER_LIST_REQUEST - ส่งรายชื่อ peers ที่เราเชื่อมต่ออยู่กลับไป
+          Log.d('📡 [MESH] Received PEER_LIST_REQUEST from ${meshMessage.from.substring(0, 8)}...');
+
           // สร้างรายชื่อ peers ที่เราเชื่อมต่ออยู่
           final myPeers = _routingTable.keys
               .where((id) => id != deviceId && id != meshMessage.from)
@@ -312,7 +319,7 @@ class MeshTransport implements Transport {
                 return '$id|$name|${isDirect ? "1" : "0"}';
               })
               .join(',');
-          
+
           // ส่งกลับไป
           final response = _MeshMessage(
             id: _generateMessageId(),
@@ -322,28 +329,27 @@ class MeshTransport implements Transport {
             ttl: 3,
             hops: [],
           );
-          
+
           await _sendMeshMessage(response);
-          debugPrint('📡 [MESH] Sent PEER_LIST_RESPONSE with ${_routingTable.length - 1} peers');
-          return;
-        }
-        
-        // 🔧 จัดการ PEER_LIST_RESPONSE - อัปเดต routing table ด้วย peers จากเพื่อนบ้าน
-        if (meshMessage.body.startsWith('PEER_LIST_RESPONSE:')) {
+          Log.d('📡 [MESH] Sent PEER_LIST_RESPONSE with ${_routingTable.length - 1} peers');
+          // ตั้งใจไม่ forward ต่อ (ttl=1 ของข้อความนี้ออกแบบให้ถามเฉพาะ direct neighbor)
+          suppressForward = true;
+        } else if (meshMessage.body.startsWith('PEER_LIST_RESPONSE:')) {
+          // 🔧 จัดการ PEER_LIST_RESPONSE - อัปเดต routing table ด้วย peers จากเพื่อนบ้าน
           final peerListStr = meshMessage.body.substring(19); // ตัด 'PEER_LIST_RESPONSE:' ออก
-          debugPrint('📡 [MESH] Received PEER_LIST_RESPONSE from ${meshMessage.from.substring(0, 8)}...');
-          
+          Log.d('📡 [MESH] Received PEER_LIST_RESPONSE from ${meshMessage.from.substring(0, 8)}...');
+
           if (peerListStr.isNotEmpty) {
             final peerEntries = peerListStr.split(',');
             var newPeersFound = 0;
-            
+
             for (final entry in peerEntries) {
               final parts = entry.split('|');
               if (parts.length >= 2) {
                 final peerId = parts[0];
                 final peerName = parts[1];
                 // parts[2] คือ isDirect flag (ไม่ใช้ในกรณีนี้)
-                
+
                 // ถ้ายังไม่เคยเจอ peer นี้มาก่อน → เพิ่มเข้า routing table
                 if (!_routingTable.containsKey(peerId) && peerId != deviceId) {
                   // เส้นทางไป peerId คือผ่าน meshMessage.from (ผู้ตอบกลับมา)
@@ -352,61 +358,58 @@ class MeshTransport implements Transport {
                   _deviceNames[peerId] = peerName;
                   _allPeers.add(peerId);
                   newPeersFound++;
-                  
-                  debugPrint('📡 [MESH] ✅ Discovered new mesh peer: $peerName via ${_deviceNames[viaPeerId] ?? viaPeerId.substring(0, 8)}');
+
+                  Log.d('📡 [MESH] ✅ Discovered new mesh peer: $peerName via ${_deviceNames[viaPeerId] ?? viaPeerId.substring(0, 8)}');
                 }
               }
             }
-            
+
             if (newPeersFound > 0) {
-              debugPrint('📡 [MESH] Found $newPeersFound new mesh peers!');
+              Log.d('📡 [MESH] Found $newPeersFound new mesh peers!');
               _emitPeers(); // อัปเดต UI
             }
           }
-          return;
-        }
-        
-        // กรองข้อความ control อื่นๆ (HELLO, ROUTE_UPDATE, PEER_LIST_* ฯลฯ) ไม่ให้แสดงในแชท
-        if (meshMessage.body == 'HELLO' || 
+          // PEER_LIST_RESPONSE เป็น unicast ถึงเราแล้ว (isUnicastTerminal) จะไม่ forward ต่ออยู่แล้ว
+        } else if (meshMessage.body == 'HELLO' ||
             meshMessage.body.startsWith('ROUTE_') ||
             meshMessage.body.startsWith('PEER_LIST_')) {
-          debugPrint('📡 [MESH] Control message filtered: ${meshMessage.body.split(':')[0]}');
+          // กรองข้อความ control อื่นๆ ไม่ให้แสดงในแชท แต่ยัง forward ต่อได้ตาม ttl ปกติ
+          Log.d('📡 [MESH] Control message filtered: ${meshMessage.body.split(':')[0]}');
           _emitPeers(); // อัปเดต peer list
-          return;
+        } else {
+          // ข้อความปกติ - ส่งต่อไปยัง message stream
+          final bodyPreview = meshMessage.body.length > 50 ? '${meshMessage.body.substring(0, 50)}...' : meshMessage.body;
+          Log.d('📡 [MESH] ✅ Forwarding message to app: $bodyPreview');
+
+          // 🔧 ใช้ Nearby peer ID สำหรับ direct peers, mesh device ID สำหรับ mesh peers
+          final actualFromPeerId = isFromDirectPeer ? message.fromPeerId : meshMessage.from;
+
+          _msgCtrl.add(Message(
+            fromPeerId: actualFromPeerId,
+            toPeerId: meshMessage.to,
+            body: meshMessage.body,
+            time: DateTime.now(),
+          ));
+
+          _emitPeers(); // อัปเดต peer list
         }
-        
-        // ข้อความปกติ - ส่งต่อไปยัง message stream
-        final bodyPreview = meshMessage.body.length > 50 ? '${meshMessage.body.substring(0, 50)}...' : meshMessage.body;
-        debugPrint('📡 [MESH] ✅ Forwarding message to app: $bodyPreview');
-        
-        // 🔧 ใช้ Nearby peer ID สำหรับ direct peers, mesh device ID สำหรับ mesh peers
-        final actualFromPeerId = isFromDirectPeer ? message.fromPeerId : meshMessage.from;
-        
-        _msgCtrl.add(Message(
-          fromPeerId: actualFromPeerId,
-          toPeerId: meshMessage.to,
-          body: meshMessage.body,
-          time: DateTime.now(),
-        ));
-        
-        _emitPeers(); // อัปเดต peer list
-        return;
       }
-      
-      // ข้อความไม่ใช่ของเรา - forward ต่อ
-      if (meshMessage.ttl > 0) {
-        debugPrint('📡 [MESH] Forwarding message ${_safeSubstring(meshMessage.id, 20)}... (TTL: ${meshMessage.ttl})');
-        
+
+      // 🔁 Forward ต่อตาม TTL ของข้อความเอง - ใช้กฎเดียวกันทั้ง broadcast และ unicast
+      // (เดิม broadcast จะถูก "กิน" ที่ hop แรกเสมอ ทำให้ multi-hop ใช้ไม่ได้จริงสำหรับ HELLO/SOS broadcast)
+      if (!isUnicastTerminal && !suppressForward && meshMessage.ttl > 0) {
+        Log.d('📡 [MESH] Forwarding message ${_safeSubstring(meshMessage.id, 20)}... (TTL: ${meshMessage.ttl})');
+
         final forwardedMessage = meshMessage.decrementTTL(deviceId);
         await _broadcastMeshMessage(forwardedMessage);
-      } else {
-        debugPrint('📡 [MESH] Message ${_safeSubstring(meshMessage.id, 20)}... expired (TTL=0)');
+      } else if (!isUnicastTerminal && !suppressForward) {
+        Log.d('📡 [MESH] Message ${_safeSubstring(meshMessage.id, 20)}... expired (TTL=0)');
       }
-      
+
     } catch (e, stackTrace) {
-      debugPrint('❌ [MESH] Error processing message: $e');
-      debugPrint('❌ [MESH] Stack trace: $stackTrace');
-      debugPrint('❌ [MESH] Original message: ${message.body}');
+      Log.d('❌ [MESH] Error processing message: $e');
+      Log.d('❌ [MESH] Stack trace: $stackTrace');
+      Log.d('❌ [MESH] Original message: ${message.body}');
     }
   }
 
@@ -418,21 +421,21 @@ class MeshTransport implements Transport {
     final nextHop = _routingTable[targetId];
     
     if (nextHop == null) {
-      debugPrint('📡 [MESH] No route to $targetId - broadcasting instead');
+      Log.d('📡 [MESH] No route to $targetId - broadcasting instead');
       await _broadcastMeshMessage(message);
       return;
     }
     
     // ส่งไปยัง next hop
     final encoded = message.encode();
-    debugPrint('📡 [MESH] Sending via route: target=$targetId, nextHop=$nextHop');
+    Log.d('📡 [MESH] Sending via route: target=$targetId, nextHop=$nextHop');
     await _baseTransport.sendMessage(encoded, to: null); // broadcast เพราะ nearby ไม่รองรับ unicast
   }
 
   Future<void> _broadcastMeshMessage(_MeshMessage message) async {
     final encoded = message.encode();
     final preview = encoded.length > 100 ? '${encoded.substring(0, 100)}...' : encoded;
-    debugPrint('📡 [MESH] Broadcasting encoded message: $preview');
+    Log.d('📡 [MESH] Broadcasting encoded message: $preview');
     await _baseTransport.sendMessage(encoded, to: null);
   }
 
@@ -442,7 +445,7 @@ class MeshTransport implements Transport {
       _messageHistory.removeWhere((_, timestamp) => 
         now.difference(timestamp).inMinutes > 30
       );
-      debugPrint('📡 [MESH] Cleaned up old messages. Current: ${_messageHistory.length}');
+      Log.d('📡 [MESH] Cleaned up old messages. Current: ${_messageHistory.length}');
     });
   }
 
@@ -459,7 +462,7 @@ class MeshTransport implements Transport {
       );
       
       await _broadcastMeshMessage(helloMessage);
-      debugPrint('📡 [MESH] Initial HELLO sent with name=$deviceName');
+      Log.d('📡 [MESH] Initial HELLO sent with name=$deviceName');
     });
     
     // ✅ ส่ง HELLO ซ้ำทุก 30 วินาที สำหรับ mesh hops และขอข้อมูล peer list
@@ -475,7 +478,7 @@ class MeshTransport implements Transport {
       );
       
       await _broadcastMeshMessage(helloMessage);
-      debugPrint('📡 [MESH] Periodic HELLO refresh (30s interval)');
+      Log.d('📡 [MESH] Periodic HELLO refresh (30s interval)');
       
       // 2. ขอรายชื่อ peers จากอุปกรณ์ที่เชื่อมต่ออยู่
       final peerListRequest = _MeshMessage(
@@ -488,7 +491,7 @@ class MeshTransport implements Transport {
       );
       
       await _broadcastMeshMessage(peerListRequest);
-      debugPrint('📡 [MESH] Requesting peer lists from neighbors');
+      Log.d('📡 [MESH] Requesting peer lists from neighbors');
     });
   }
 
@@ -496,38 +499,38 @@ class MeshTransport implements Transport {
   void _startPeriodicScan() {
     _scanTimer = Timer.periodic(const Duration(seconds: 20), (_) async {
       if (_baseTransport.discoveryState == DiscoveryState.scanning) {
-        debugPrint('📡 [MESH] Periodic scan: refreshing device discovery...');
+        Log.d('📡 [MESH] Periodic scan: refreshing device discovery...');
         try {
           // รีเฟรช discovery เพื่อหาอุปกรณ์ใหม่ (ไม่หยุด-เริ่มใหม่ เพื่อไม่ให้ disconnect)
           // เพียงแค่ส่งคำขอ scan ใหม่
-          debugPrint('📡 [MESH] Triggering new scan without stopping...');
-          debugPrint('📡 [MESH] ✅ Scan refresh triggered');
+          Log.d('📡 [MESH] Triggering new scan without stopping...');
+          Log.d('📡 [MESH] ✅ Scan refresh triggered');
         } catch (e) {
-          debugPrint('❌ [MESH] Error refreshing scan: $e');
+          Log.d('❌ [MESH] Error refreshing scan: $e');
         }
       }
     });
     
-    debugPrint('📡 [MESH] Periodic scanning started (every 20 seconds)');
+    Log.d('📡 [MESH] Periodic scanning started (every 20 seconds)');
   }
 
   void _emitPeers() {
-    debugPrint('📡 [MESH] ========== _emitPeers START ==========');
-    debugPrint('📡 [MESH] Device ID: $deviceId');
-    debugPrint('📡 [MESH] Device Name: $deviceName');
-    debugPrint('📡 [MESH] Routing table entries: ${_routingTable.length}');
+    Log.d('📡 [MESH] ========== _emitPeers START ==========');
+    Log.d('📡 [MESH] Device ID: $deviceId');
+    Log.d('📡 [MESH] Device Name: $deviceName');
+    Log.d('📡 [MESH] Routing table entries: ${_routingTable.length}');
     
     // ใช้ routing table เป็นแหล่งข้อมูลหลัก
     final allPeerEntries = _routingTable.entries
         .where((entry) => entry.key != deviceId) // ไม่แสดงตัวเอง
         .toList();
     
-    debugPrint('📡 [MESH] _emitPeers: Processing ${allPeerEntries.length} peer entries (after filtering deviceId)');
+    Log.d('📡 [MESH] _emitPeers: Processing ${allPeerEntries.length} peer entries (after filtering deviceId)');
     
     // แสดง routing table details
     for (final entry in allPeerEntries) {
       final keyPreview = entry.key.length > 20 ? '${entry.key.substring(0, 20)}...' : entry.key;
-      debugPrint('📡 [MESH]   Route: $keyPreview → ${entry.value}');
+      Log.d('📡 [MESH]   Route: $keyPreview → ${entry.value}');
     }
     
     // 🔧 กรองเพื่อไม่ให้แสดง peer ซ้ำ (ตาม device name)
@@ -543,7 +546,7 @@ class MeshTransport implements Transport {
       
       // 🔧 กรองตัวเองออก (ตามชื่อ)
       if (name == deviceName) {
-        debugPrint('📡 [MESH] Skipping self: $name (id: $id)');
+        Log.d('📡 [MESH] Skipping self: $name (id: $id)');
         continue;
       }
       
@@ -555,13 +558,13 @@ class MeshTransport implements Transport {
         // ถ้า peer ใหม่เป็น direct แต่ของเก่าไม่ใช่ → เปลี่ยนเป็นของใหม่
         if (isDirect && !existingIsDirect) {
           uniquePeers[name] = entry;
-          debugPrint('🔧 [MESH] Replaced mesh peer with direct: $name');
+          Log.d('🔧 [MESH] Replaced mesh peer with direct: $name');
         }
         // ถ้าทั้งสองเป็น direct หรือทั้งสองไม่ใช่ → เก็บของเก่าไว้
       } else {
         // ชื่อใหม่ → เพิ่มเข้าไป
         uniquePeers[name] = entry;
-        debugPrint('📡 [MESH] Adding peer: $name (${isDirect ? "direct" : "mesh"})');
+        Log.d('📡 [MESH] Adding peer: $name (${isDirect ? "direct" : "mesh"})');
       }
     }
     
@@ -583,14 +586,14 @@ class MeshTransport implements Transport {
     // ✅ เช็คว่า stream ยังเปิดอยู่ก่อน emit
     if (!_peersCtrl.isClosed) {
       _peersCtrl.add(peerList);
-      debugPrint('📡 [MESH] ✅ Emitted ${peerList.length} unique peers (from ${_routingTable.length} routes)');
+      Log.d('📡 [MESH] ✅ Emitted ${peerList.length} unique peers (from ${_routingTable.length} routes)');
       
       // แสดง peer details
       for (final peer in peerList) {
-        debugPrint('  📱 ${peer.name} (${peer.nearby ? "direct" : "mesh"})');
+        Log.d('  📱 ${peer.name} (${peer.nearby ? "direct" : "mesh"})');
       }
     } else {
-      debugPrint('⚠️ [MESH] Cannot emit peers - stream is closed');
+      Log.d('⚠️ [MESH] Cannot emit peers - stream is closed');
     }
   }
 

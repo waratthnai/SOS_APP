@@ -76,3 +76,11 @@ app.*.map.json
 *.keystore
 *.jks
 !example.key
+
+# Local dev files
+scheduled_tasks.lock
+settings.local.json
+test_results.txt
+
+# Flutter SDK (if accidentally placed inside project)
+/flutter/

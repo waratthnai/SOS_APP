@@ -1,6 +1,8 @@
 // lib/ui/profile_screen.dart
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../core/friend_service.dart';
+import '../cloud/firebase_service.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -116,8 +118,101 @@ class _ProfileScreenState extends State<ProfileScreen> {
             padding: const EdgeInsets.all(16),
             child: Column(
               children: [
+                // Cloud Sync Banner
+                AnimatedBuilder(
+                  animation: firebaseService,
+                  builder: (context, _) {
+                    final isSignedIn = firebaseService.isSignedIn;
+                    final isOnline = firebaseService.isOnline;
+                    final email = firebaseService.currentUser?.email;
+
+                    if (isSignedIn) {
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1B3A2A),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFF2E7D4F), width: 1),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              isOnline ? Icons.cloud_done : Icons.cloud_off,
+                              color: isOnline ? const Color(0xFF43A047) : const Color(0xFF8A9BC2),
+                              size: 20,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    isOnline ? 'เชื่อมต่อ Cloud แล้ว' : 'login อยู่ (ออฟไลน์)',
+                                    style: const TextStyle(
+                                      color: Color(0xFF43A047),
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                  if (email != null)
+                                    Text(
+                                      email,
+                                      style: const TextStyle(color: Color(0xFF8A9BC2), fontSize: 11),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }
+
+                    // ยังไม่ได้ login → แสดง soft prompt
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1E2A40),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFF2E3D5A), width: 1),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.cloud_off, color: Color(0xFF6A7A9A), size: 20),
+                          const SizedBox(width: 10),
+                          const Expanded(
+                            child: Text(
+                              'เข้าสู่ระบบเพื่อ sync กับเพื่อนและสำรองข้อมูลบน Cloud\nใช้งานออฟไลน์ได้โดยไม่ต้อง login',
+                              style: TextStyle(color: Color(0xFF8A9BC2), fontSize: 12),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          TextButton(
+                            onPressed: () {
+                              // กลับไปที่หน้าหลักแล้วให้ user ไปที่ Settings tab ด้วยตัวเอง
+                              Navigator.pop(context);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('ไปที่แท็บ "การตั้งค่า" เพื่อเข้าสู่ระบบ'),
+                                  duration: Duration(seconds: 3),
+                                ),
+                              );
+                            },
+                            style: TextButton.styleFrom(
+                              foregroundColor: const Color(0xFF1A90FF),
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            ),
+                            child: const Text('Login', style: TextStyle(fontSize: 13)),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+
                 // Profile Picture Section
-                const SizedBox(height: 32),
+                const SizedBox(height: 16),
                 Center(
                   child: Stack(
                     children: [
@@ -198,6 +293,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             IconButton(
                               icon: const Icon(Icons.copy),
                               onPressed: () {
+                                Clipboard.setData(ClipboardData(text: currentUser.id));
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   const SnackBar(content: Text('คัดลอก ID แล้ว')),
                                 );

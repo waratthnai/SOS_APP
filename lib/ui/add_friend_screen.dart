@@ -1,9 +1,10 @@
-// lib/ui/add_friend_screen.dart
+﻿// lib/ui/add_friend_screen.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // เพิ่ม import สำหรับ Clipboard
 import 'package:flutter/foundation.dart'; // เพิ่ม import สำหรับ debugPrint
 import '../core/friend_service.dart';
 import '../core/friend_models.dart';
+import 'package:offgrid_sos/core/logger.dart';
 
 class AddFriendScreen extends StatefulWidget {
   const AddFriendScreen({super.key});
@@ -64,7 +65,7 @@ class _AddFriendScreenState extends State<AddFriendScreen> {
     setState(() => _isLoading = true);
 
     try {
-      debugPrint('[AddFriendScreen] 📤 กำลังส่งคำขอไปหา: ${user.name} (${user.id})');
+      Log.d('[AddFriendScreen] 📤 กำลังส่งคำขอไปหา: ${user.name} (${user.id})');
       
       final success = await friendService.sendFriendRequest(
         user, 
@@ -74,7 +75,7 @@ class _AddFriendScreenState extends State<AddFriendScreen> {
       setState(() => _isLoading = false);
 
       if (success) {
-        debugPrint('[AddFriendScreen] ✅ ส่งคำขอสำเร็จ');
+        Log.d('[AddFriendScreen] ✅ ส่งคำขอสำเร็จ');
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -86,7 +87,7 @@ class _AddFriendScreenState extends State<AddFriendScreen> {
           Navigator.pop(context);
         }
       } else {
-        debugPrint('[AddFriendScreen] ❌ ส่งคำขอไม่สำเร็จ');
+        Log.d('[AddFriendScreen] ❌ ส่งคำขอไม่สำเร็จ');
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -98,7 +99,7 @@ class _AddFriendScreenState extends State<AddFriendScreen> {
         }
       }
     } catch (e) {
-      debugPrint('[AddFriendScreen] ❌ Error: $e');
+      Log.d('[AddFriendScreen] ❌ Error: $e');
       setState(() => _isLoading = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

@@ -1,6 +1,7 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:offgrid_sos/core/logger.dart';
 
 class BackgroundService {
   static final BackgroundService _instance = BackgroundService._internal();
@@ -87,7 +88,7 @@ class BackgroundService {
       _isRunning = true;
       return true;
     } catch (e) {
-      print('❌ Error starting service: $e');
+      Log.d('❌ Error starting service: $e');
       return false;
     }
   }
@@ -103,7 +104,7 @@ class BackgroundService {
       _isRunning = false;
       return true;
     } catch (e) {
-      print('❌ Error stopping service: $e');
+      Log.d('❌ Error stopping service: $e');
       return false;
     }
   }
@@ -228,7 +229,7 @@ class BackgroundTaskHandler extends TaskHandler {
 
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
-    print('🔄 Background service started at $timestamp');
+    Log.d('🔄 Background service started at $timestamp');
   }
 
   @override
@@ -246,7 +247,7 @@ class BackgroundTaskHandler extends TaskHandler {
 
   @override
   Future<void> onDestroy(DateTime timestamp) async {
-    print('⏹️ Background service stopped at $timestamp');
+    Log.d('⏹️ Background service stopped at $timestamp');
   }
 
   @override

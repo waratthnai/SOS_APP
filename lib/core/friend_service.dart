@@ -1,16 +1,21 @@
-// lib/core/friend_service.dart
+﻿// lib/core/friend_service.dart
 import 'dart:async';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'friend_models.dart';
 import 'friend_db.dart';
 import '../cloud/firebase_service.dart';
+import 'fcm_service.dart';
+import 'package:offgrid_sos/core/logger.dart';
 
-class FriendService extends ChangeNotifier {
+class FriendService extends ChangeNotifier with WidgetsBindingObserver {
   final List<Friend> _friends = [];
   final List<FriendRequest> _friendRequests = [];
   UserProfile? _currentUser;
   bool _isLoading = false;
-  Timer? _syncTimer; // เพิ่ม timer สำหรับ auto sync
+  Timer? _syncTimer;
+  StreamSubscription<QuerySnapshot>? _requestsListener;
+  StreamSubscription<QuerySnapshot>? _acceptedSentListener;
 
   // Getters
   List<Friend> get friends => List.unmodifiable(_friends);
@@ -25,61 +30,81 @@ class FriendService extends ChangeNotifier {
   List<Friend> get friendsWithUnreadMessages => _friends.where((f) => f.unreadCount > 0).toList();
 
   // Total unread count
-  int get totalUnreadCount => _friends.fold(0, (sum, f) => sum + f.unreadCount);
+  int get totalUnreadCount => _friends.fold(0, (acc, f) => acc + f.unreadCount);
 
   /// Initialize the service
   Future<void> init() async {
+    WidgetsBinding.instance.addObserver(this);
     _setLoading(true);
-    
+
     // โหลดข้อมูลผู้ใช้
     await _loadCurrentUser();
-    
-    // 🔥 ตั้งสถานะออนไลน์ทันทีหลังโหลดโปรไฟล์ (ก่อน sync)
+
+    // 🔔 บันทึก FCM token ลง Firestore ตอนนี้ที่รู้ currentUser แล้ว
+    // (ตอน FCMService().initialize() ใน main.dart รันก่อนหน้านี้ currentUser ยังเป็น null อยู่)
     if (_currentUser != null && firebaseService.isOnline && firebaseService.isSignedIn) {
-      debugPrint('[FriendService] ✅ ตั้งสถานะออนไลน์หลัง login สำหรับ: ${_currentUser!.name} (${_currentUser!.id})');
-      
+      FCMService().syncTokenForCurrentUser().catchError((e) {
+        Log.d('[FriendService] ⚠️ Error syncing FCM token: $e');
+      });
+    }
+
+    // ตั้งสถานะออนไลน์หลังโหลดโปรไฟล์
+    if (_currentUser != null && firebaseService.isOnline && firebaseService.isSignedIn) {
       try {
         await firebaseService.updateOnlineStatus(_currentUser!.id, true);
-        debugPrint('[FriendService] ✅ ตั้งสถานะออนไลน์สำเร็จ');
-        
-        // ⏱️ รอให้ Firebase propagate ข้อมูล (1 วินาที)
-        debugPrint('[FriendService] ⏱️ รอให้ Firebase อัปเดตข้อมูล (1 วินาที)...');
-        await Future.delayed(const Duration(milliseconds: 1000));
-        debugPrint('[FriendService] ✅ พร้อม sync แล้ว');
+        Log.d('[FriendService] ✅ ตั้งสถานะออนไลน์: ${_currentUser!.name}');
       } catch (e) {
-        debugPrint('[FriendService] ❌ Error ตั้งสถานะออนไลน์: $e');
+        Log.d('[FriendService] ⚠️ Error ตั้งสถานะออนไลน์: $e');
       }
     }
-    
+
     // โหลดเพื่อนจากฐานข้อมูลท้องถิ่น
     await _loadLocalFriends();
-    debugPrint('[FriendService] 📱 โหลดเพื่อนจาก Local: ${_friends.length} คน');
-    
+    Log.d('[FriendService] 📱 โหลดเพื่อนจาก Local: ${_friends.length} คน');
+
     // โหลดคำขอเป็นเพื่อนจากฐานข้อมูลท้องถิ่น
     await _loadLocalFriendRequests();
-    debugPrint('[FriendService] 📱 โหลดคำขอจาก Local: ${_friendRequests.length} รายการ');
-    
-    // Sync กับ Firebase หากออนไลน์ (บังคับทุกครั้งเพื่อให้ข้อมูลถูกต้อง)
+    Log.d('[FriendService] 📱 โหลดคำขอจาก Local: ${_friendRequests.length} รายการ');
+
+    // Sync กับ Firebase หากออนไลน์
     if (firebaseService.isOnline && firebaseService.isSignedIn) {
-      debugPrint('[FriendService] 🔄 เริ่ม sync กับ Firebase...');
+      Log.d('[FriendService] 🔄 เริ่ม sync กับ Firebase...');
       await syncWithFirebase();
-      debugPrint('[FriendService] ✅ sync เสร็จสิ้น: เพื่อน=${_friends.length} คน, คำขอ=${_friendRequests.length} รายการ');
-      
-      // ✨ เพิ่ม: เปิด auto sync ทุก 30 วินาที
+      Log.d('[FriendService] ✅ sync เสร็จสิ้น: เพื่อน=${_friends.length} คน, คำขอ=${_friendRequests.length} รายการ');
+
       _startAutoSync();
+      _startRequestsListener(); // [Fix 4] เปิด real-time listener
+      _startAcceptedSentListener(); // เปิด real-time listener สำหรับคำขอที่เราส่งไปแล้วถูกรับ
     } else {
-      debugPrint('[FriendService] ⚠️ ไม่สามารถ sync: Online=${firebaseService.isOnline}, SignedIn=${firebaseService.isSignedIn}');
+      Log.d('[FriendService] ⚠️ ไม่สามารถ sync: Online=${firebaseService.isOnline}, SignedIn=${firebaseService.isSignedIn}');
     }
-    
+
     _setLoading(false);
   }
 
-  /// เริ่ม auto sync ทุก 10 วินาที
+  // [Fix 2] ติดตาม app lifecycle เพื่ออัปเดตสถานะออนไลน์
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (_currentUser == null) return;
+    if (!firebaseService.isOnline || !firebaseService.isSignedIn) return;
+
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.detached) {
+      firebaseService.updateOnlineStatus(_currentUser!.id, false).catchError((e) {
+        Log.d('[FriendService] ⚠️ Error set offline: $e');
+      });
+    } else if (state == AppLifecycleState.resumed) {
+      firebaseService.updateOnlineStatus(_currentUser!.id, true).catchError((e) {
+        Log.d('[FriendService] ⚠️ Error set online: $e');
+      });
+    }
+  }
+
+  /// auto sync ทุก 60 วินาที — ประหยัดแบตเตอรี่สำหรับสถานการณ์ภัยพิบัติ
   void _startAutoSync() {
     _syncTimer?.cancel();
-    _syncTimer = Timer.periodic(const Duration(seconds: 10), (timer) async {
+    _syncTimer = Timer.periodic(const Duration(seconds: 60), (timer) async {
       if (firebaseService.isOnline && firebaseService.isSignedIn) {
-        debugPrint('[FriendService] 🔄 Auto sync...');
         await syncWithFirebase();
       }
     });
@@ -93,67 +118,81 @@ class FriendService extends ChangeNotifier {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     stopAutoSync();
+    _requestsListener?.cancel();
+    _requestsListener = null;
+    _acceptedSentListener?.cancel();
+    _acceptedSentListener = null;
     super.dispose();
   }
 
-  /// โหลดข้อมูลผู้ใช้ปัจจุบัน
+  /// โหลดข้อมูลผู้ใช้ปัจจุบัน — offline-first: ถ้า login อยู่จะใช้ Firebase UID เสมอ
+  /// ไม่ว่าจะมีเน็ตหรือไม่ เพื่อรองรับสถานการณ์ภัยพิบัติที่ไม่มีสัญญาณ
   Future<void> _loadCurrentUser() async {
     try {
-      // ตรวจสอบว่า login Firebase หรือไม่
       final firebaseUser = firebaseService.currentUser;
-      
-      if (firebaseUser != null && firebaseUser.email != null && firebaseService.isOnline) {
-        // ✅ ใช้ Firebase UID เป็น User ID (ไม่เปลี่ยนแปลง!)
+
+      if (firebaseUser != null) {
+        // ✅ login อยู่ → ใช้ Firebase UID เสมอ ไม่ว่าจะออนไลน์หรือไม่
         final userId = firebaseUser.uid;
-        debugPrint('[FriendService] 🔑 Firebase UID: $userId');
-        
-        // ลองดึงโปรไฟล์จาก Firebase ด้วย UID
-        try {
-          final existingProfile = await firebaseService.findUserByUserId(userId);
-          
-          if (existingProfile != null) {
-            // พบโปรไฟล์เดิมใน Firebase แล้ว
-            _currentUser = existingProfile;
-            await FriendDB.saveUserProfile(_currentUser!);
-            debugPrint('[FriendService] ✅ โหลดโปรไฟล์เดิมจาก Firebase: ${_currentUser!.id}');
-            return;
-          } else {
-            debugPrint('[FriendService] ⚠️ ไม่พบโปรไฟล์ใน Firebase กำลังสร้างใหม่');
+        Log.d('[FriendService] 🔑 Firebase UID: $userId');
+
+        // 1️⃣ Local cache ก่อนเสมอ (เร็ว ทำงานได้แม้ไม่มีเน็ต)
+        final localProfile = await FriendDB.getUserProfile();
+        if (localProfile != null && localProfile.id == userId) {
+          _currentUser = localProfile;
+          Log.d('[FriendService] ✅ ใช้โปรไฟล์จาก Local Cache (ID ตรง): ${_currentUser!.id}');
+          // sync กับ Firebase ใน background ไม่ blocking
+          if (firebaseService.isOnline) {
+            _syncProfileInBackground();
           }
-        } catch (e) {
-          debugPrint('[FriendService] ⚠️ Error loading user from Firebase: $e');
+          return;
         }
-        
-        // ถ้าไม่พบใน Firebase ให้สร้างใหม่ด้วย Firebase UID
-        final displayName = firebaseUser.displayName ?? 'ผู้ใช้ ${DateTime.now().millisecondsSinceEpoch % 1000}';
+
+        // 2️⃣ local ไม่มีหรือ ID ไม่ตรง (เปลี่ยน account) → ดึงจาก Firebase ถ้าออนไลน์
+        if (firebaseService.isOnline) {
+          try {
+            final remoteProfile = await firebaseService.findUserByUserId(userId);
+            if (remoteProfile != null) {
+              _currentUser = remoteProfile;
+              await FriendDB.saveUserProfile(_currentUser!);
+              Log.d('[FriendService] ✅ โหลดโปรไฟล์จาก Firebase: ${_currentUser!.id}');
+              return;
+            }
+          } catch (e) {
+            Log.d('[FriendService] ⚠️ Error loading from Firebase: $e');
+          }
+        }
+
+        // 3️⃣ ออฟไลน์ + ไม่มี local cache → สร้างด้วย Firebase UID (sync ตอนมีเน็ต)
+        final displayName = firebaseUser.displayName?.isNotEmpty == true
+            ? firebaseUser.displayName!
+            : 'ผู้ใช้';
         _currentUser = UserProfile(
-          id: userId, // ✅ ใช้ Firebase UID ตรงๆ
+          id: userId,
           name: displayName,
           email: firebaseUser.email,
           createdAt: DateTime.now(),
           lastActiveAt: DateTime.now(),
         );
         await FriendDB.saveUserProfile(_currentUser!);
-        debugPrint('[FriendService] ✨ สร้างโปรไฟล์ใหม่ด้วย Firebase UID: ${_currentUser!.id}');
-        
-        // บันทึกขึ้น Firebase ทันทีถ้า login แล้ว
-        try {
-          await firebaseService.saveFullUserProfile(_currentUser!);
-          debugPrint('[FriendService] ☁️ บันทึกโปรไฟล์ขึ้น Firebase แล้ว');
-          
-          // AppState จะฟังการเปลี่ยนแปลงและโหลดแชทเอง
-        } catch (e) {
-          debugPrint('[FriendService] ⚠️ Error saving to Firebase: $e');
+        Log.d('[FriendService] 📱 สร้างโปรไฟล์ด้วย Firebase UID (ออฟไลน์): $userId');
+
+        if (firebaseService.isOnline) {
+          try {
+            await firebaseService.saveFullUserProfile(_currentUser!);
+            Log.d('[FriendService] ☁️ บันทึกโปรไฟล์ใหม่ขึ้น Firebase แล้ว');
+          } catch (e) {
+            Log.d('[FriendService] ⚠️ Error saving to Firebase: $e');
+          }
         }
         return;
       }
-      
-      // ถ้าไม่ได้ login ให้ดึงจาก local
+
+      // ไม่ได้ login Firebase → ดึงจาก local (offline mode)
       _currentUser = await FriendDB.getUserProfile();
-      
       if (_currentUser == null) {
-        // สร้างโปรไฟล์แบบออฟไลน์ (ใช้ ID สุ่ม)
         _currentUser = UserProfile(
           id: FriendDB.generateUserId(),
           name: 'ผู้ใช้ ${DateTime.now().millisecondsSinceEpoch % 1000}',
@@ -161,21 +200,34 @@ class FriendService extends ChangeNotifier {
           lastActiveAt: DateTime.now(),
         );
         await FriendDB.saveUserProfile(_currentUser!);
-        debugPrint('[FriendService] 📱 สร้างโปรไฟล์แบบออฟไลน์: ${_currentUser!.id}');
+        Log.d('[FriendService] 📱 สร้างโปรไฟล์ออฟไลน์: ${_currentUser!.id}');
       } else {
-        debugPrint('[FriendService] 📱 ใช้โปรไฟล์จาก Local: ${_currentUser!.id}');
+        Log.d('[FriendService] 📱 ใช้โปรไฟล์จาก Local: ${_currentUser!.id}');
       }
     } catch (e) {
-      debugPrint('[FriendService] ❌ Fatal error in _loadCurrentUser: $e');
-      // สร้าง fallback profile
+      Log.d('[FriendService] ❌ Fatal error in _loadCurrentUser: $e');
       _currentUser = UserProfile(
         id: FriendDB.generateUserId(),
-        name: 'ผู้ใช้ ${DateTime.now().millisecondsSinceEpoch % 1000}',
+        name: 'ผู้ใช้',
         createdAt: DateTime.now(),
         lastActiveAt: DateTime.now(),
       );
       await FriendDB.saveUserProfile(_currentUser!);
     }
+  }
+
+  /// Sync โปรไฟล์กับ Firebase ใน background ไม่ blocking
+  void _syncProfileInBackground() {
+    if (_currentUser == null) return;
+    firebaseService.findUserByUserId(_currentUser!.id).then((remote) {
+      if (remote == null) {
+        firebaseService.saveFullUserProfile(_currentUser!).catchError((e) {
+          Log.d('[FriendService] ⚠️ Background profile upload error: $e');
+        });
+      }
+    }).catchError((e) {
+      Log.d('[FriendService] ⚠️ Background profile sync error: $e');
+    });
   }
 
   /// โหลดเพื่อนจากฐานข้อมูลท้องถิ่น
@@ -195,16 +247,26 @@ class FriendService extends ChangeNotifier {
   /// Sync ข้อมูลกับ Firebase
   Future<void> syncWithFirebase() async {
     if (!firebaseService.isOnline || !firebaseService.isSignedIn || _currentUser == null) {
-      debugPrint('[FriendService] ⚠️ ไม่สามารถ sync: Online=${firebaseService.isOnline}, SignedIn=${firebaseService.isSignedIn}, User=${_currentUser != null}');
+      Log.d('[FriendService] ⚠️ ไม่สามารถ sync: Online=${firebaseService.isOnline}, SignedIn=${firebaseService.isSignedIn}, User=${_currentUser != null}');
       return;
     }
 
     try {
       // อัพเดทโปรไฟล์บน Firebase (บังคับทุกครั้ง)
-      debugPrint('[FriendService] 🔄 กำลัง sync โปรไฟล์: ID=${_currentUser!.id}, Name=${_currentUser!.name}');
+      Log.d('[FriendService] 🔄 กำลัง sync โปรไฟล์: ID=${_currentUser!.id}, Name=${_currentUser!.name}');
       await firebaseService.saveFullUserProfile(_currentUser!);
-      debugPrint('[FriendService] ✅ sync โปรไฟล์สำเร็จ');
-      
+      Log.d('[FriendService] ✅ sync โปรไฟล์สำเร็จ');
+
+      // ⭐ ตรวจสอบคำขอที่เราส่งไปแล้วถูกอีกฝั่งกดรับ → เพิ่มเพื่อนฝั่งเราเอง
+      // (อีกฝั่งเขียนได้แค่ subcollection ของตัวเองตาม security rules ตอนกดรับ)
+      final acceptedSent = await firebaseService.getAcceptedSentRequests(_currentUser!.id);
+      for (final reqData in acceptedSent) {
+        final friendUserId = reqData['toUserId'] as String;
+        final requestId = reqData['id'] as String;
+        await firebaseService.completeAcceptedRequest(requestId, _currentUser!.id, friendUserId);
+        Log.d('[FriendService] ✅ คำขอที่ส่งไปถูกรับแล้ว เพิ่มเพื่อน: $friendUserId');
+      }
+
       // ดึงเพื่อนจาก Firebase
       final firebaseFriends = await firebaseService.getUserFriends(_currentUser!.id);
       
@@ -227,14 +289,14 @@ class FriendService extends ChangeNotifier {
       await FriendDB.saveFriends(_friends);
       
       // ดึงคำขอเป็นเพื่อนจาก Firebase (แค่ที่ส่งมาหาเราเท่านั้น)
-      debugPrint('[FriendService] 📥 กำลังดึงคำขอที่ส่งมาหา: ${_currentUser!.id}');
+      Log.d('[FriendService] 📥 กำลังดึงคำขอที่ส่งมาหา: ${_currentUser!.id}');
       final firebaseRequests = await firebaseService.getReceivedFriendRequests(_currentUser!.id);
-      debugPrint('[FriendService] ✅ ได้รับ ${firebaseRequests.length} คำขอจาก Firebase');
+      Log.d('[FriendService] ✅ ได้รับ ${firebaseRequests.length} คำขอจาก Firebase');
       
       // 🔥 สำคัญ: ล้างคำขอเก่าทั้ง local และ memory
       _friendRequests.clear();
       await FriendDB.clearFriendRequests(); // ล้างใน local storage ด้วย
-      debugPrint('[FriendService] 🗑️ ล้างคำขอเก่าออกจาก local');
+      Log.d('[FriendService] 🗑️ ล้างคำขอเก่าออกจาก local');
       
       // ผสานข้อมูลคำขอจาก Firebase
       for (final request in firebaseRequests) {
@@ -245,90 +307,99 @@ class FriendService extends ChangeNotifier {
             request.status == FriendRequestStatus.pending &&
             !isAlreadyFriend) {
           _friendRequests.add(request);
-          debugPrint('[FriendService] ➕ เพิ่มคำขอจาก: ${request.fromUserName} (ID: ${request.id})');
+          Log.d('[FriendService] ➕ เพิ่มคำขอจาก: ${request.fromUserName} (ID: ${request.id})');
         } else if (isAlreadyFriend) {
-          debugPrint('[FriendService] ⏭️ ข้าม: ${request.fromUserName} (เป็นเพื่อนอยู่แล้ว)');
+          Log.d('[FriendService] ⏭️ ข้าม: ${request.fromUserName} (เป็นเพื่อนอยู่แล้ว)');
         }
       }
       
       // บันทึกคำขอลงฐานข้อมูลท้องถิ่น
       await FriendDB.saveFriendRequests(_friendRequests);
-      debugPrint('[FriendService] 💾 บันทึก ${_friendRequests.length} คำขอลง Local');
+      Log.d('[FriendService] 💾 บันทึก ${_friendRequests.length} คำขอลง Local');
       
       // 🔍 Debug: แสดงจำนวนเพื่อนออนไลน์
       final onlineCount = _friends.where((f) => f.isOnline).length;
-      debugPrint('[FriendService] 📊 สรุป: เพื่อนทั้งหมด ${_friends.length} คน, ออนไลน์ $onlineCount คน');
+      Log.d('[FriendService] 📊 สรุป: เพื่อนทั้งหมด ${_friends.length} คน, ออนไลน์ $onlineCount คน');
       for (final friend in _friends) {
-        debugPrint('[FriendService]   - ${friend.name}: ${friend.isOnline ? "🟢 ออนไลน์" : "⚪ ออฟไลน์"}');
+        Log.d('[FriendService]   - ${friend.name}: ${friend.isOnline ? "🟢 ออนไลน์" : "⚪ ออฟไลน์"}');
       }
       
       notifyListeners();
     } catch (e) {
-      debugPrint('[FriendService] Error syncing with Firebase: $e');
+      Log.d('[FriendService] Error syncing with Firebase: $e');
     }
   }
 
-  /// อัปเดตสถานะออนไลน์ของเพื่อนทุกคน
+  // เพื่อนจะถือว่าออนไลน์ได้ก็ต่อเมื่อ heartbeat ล่าสุด (lastActiveAt) ไม่เก่ากว่านี้
+  // กันกรณีแอพเพื่อนถูกปิดแบบไม่ทันเขียนสถานะ offline (force-kill, แบตหมด, ฯลฯ)
+  // ที่จะทำให้ isOnline ค้างเป็น true บน Firebase ตลอดไป
+  static const Duration _onlineStatusTimeout = Duration(seconds: 30);
+
+  // [Fix 3] ดึงสถานะออนไลน์แบบ parallel แทนการดึงทีละคน
   Future<void> _updateFriendsOnlineStatus() async {
-    debugPrint('[FriendService] 🔄 กำลังอัปเดตสถานะออนไลน์ของเพื่อน ${_friends.length} คน...');
-    
-    for (int i = 0; i < _friends.length; i++) {
-      try {
-        // ดึงโปรไฟล์เพื่อนจาก Firebase เพื่อเช็คสถานะออนไลน์ (force reload จาก server)
-        final friendProfile = await firebaseService.findUserByUserId(_friends[i].userId, forceRefresh: true);
-        if (friendProfile != null) {
-          // อัปเดตสถานะออนไลน์
-          final oldStatus = _friends[i].isOnline;
-          _friends[i] = _friends[i].copyWith(isOnline: friendProfile.isOnline);
-          
-          if (oldStatus != friendProfile.isOnline) {
-            debugPrint('[FriendService] 🔄 ${_friends[i].name}: ${oldStatus ? "ออนไลน์" : "ออฟไลน์"} → ${friendProfile.isOnline ? "ออนไลน์" : "ออฟไลน์"}');
+    if (_friends.isEmpty) return;
+    Log.d('[FriendService] 🔄 อัปเดตสถานะออนไลน์ ${_friends.length} คน (parallel)...');
+
+    await Future.wait(
+      List.generate(_friends.length, (i) async {
+        try {
+          final profile = await firebaseService.findUserByUserId(
+            _friends[i].userId, forceRefresh: true);
+          if (profile == null) return;
+
+          final isStale = DateTime.now().difference(profile.lastActiveAt) > _onlineStatusTimeout;
+          final effectiveOnline = profile.isOnline && !isStale;
+
+          if (_friends[i].isOnline != effectiveOnline) {
+            Log.d('[FriendService] 🔄 ${_friends[i].name}: → ${effectiveOnline ? "ออนไลน์" : "ออฟไลน์"}'
+                '${isStale ? " (stale heartbeat)" : ""}');
+            _friends[i] = _friends[i].copyWith(isOnline: effectiveOnline);
           }
+        } catch (e) {
+          Log.d('[FriendService] ⚠️ Error status ${_friends[i].name}: $e');
         }
-      } catch (e) {
-        debugPrint('[FriendService] ⚠️ Error updating status for ${_friends[i].name}: $e');
-      }
-    }
-    
-    debugPrint('[FriendService] ✅ อัปเดตสถานะออนไลน์เสร็จสิ้น');
-    // แจ้ง UI ให้อัปเดต
+      }),
+    );
+
+    Log.d('[FriendService] ✅ อัปเดตสถานะออนไลน์เสร็จสิ้น');
     notifyListeners();
   }
 
   /// ค้นหาผู้ใช้เพื่อเพิ่มเป็นเพื่อน (ค้นหาจาก User ID หรือชื่อ)
   Future<List<UserProfile>> searchUsers(String query) async {
-    debugPrint('[FriendService] 🔍 เริ่มค้นหา: "$query"');
+    Log.d('[FriendService] 🔍 เริ่มค้นหา: "$query"');
     
     if (!firebaseService.isOnline) {
-      debugPrint('[FriendService] ❌ ไม่มีอินเทอร์เน็ต');
+      Log.d('[FriendService] ❌ ไม่มีอินเทอร์เน็ต');
       return [];
     }
     
     if (!firebaseService.isSignedIn) {
-      debugPrint('[FriendService] ❌ ยังไม่ได้ login');
+      Log.d('[FriendService] ❌ ยังไม่ได้ login');
       return [];
     }
 
     try {
       List<UserProfile> users = [];
       
-      // ถ้า query เป็นตัวอักษรใหญ่และตัวเลข (เช่น A7X2M9) → ค้นหาจาก User ID
-      final isUserId = RegExp(r'^[A-Z0-9]{4,8}$').hasMatch(query);
-      debugPrint('[FriendService] รูปแบบการค้นหา: ${isUserId ? "User ID" : "ชื่อ"}');
+      // [Fix 1] รองรับทั้ง short ID (A7X2M9) และ Firebase UID (lowercase 20+ chars)
+      final isUserId = RegExp(r'^[A-Z0-9]{4,8}$').hasMatch(query) ||
+          RegExp(r'^[a-zA-Z0-9]{20,}$').hasMatch(query);
+      Log.d('[FriendService] รูปแบบการค้นหา: ${isUserId ? "User ID" : "ชื่อ"}');
       
       if (isUserId) {
         // ค้นหาจาก User ID โดยตรง
         final user = await firebaseService.findUserByUserId(query);
         if (user != null) {
           users = [user];
-          debugPrint('[FriendService] ✅ พบ 1 ผู้ใช้');
+          Log.d('[FriendService] ✅ พบ 1 ผู้ใช้');
         } else {
-          debugPrint('[FriendService] ❌ ไม่พบผู้ใช้ด้วย ID นี้');
+          Log.d('[FriendService] ❌ ไม่พบผู้ใช้ด้วย ID นี้');
         }
       } else {
         // ค้นหาจากชื่อ
         users = await firebaseService.searchUsersByName(query);
-        debugPrint('[FriendService] ✅ พบ ${users.length} ผู้ใช้จากชื่อ');
+        Log.d('[FriendService] ✅ พบ ${users.length} ผู้ใช้จากชื่อ');
       }
       
       // กรองผู้ใช้ที่เป็นตัวเองและเพื่อนที่มีอยู่แล้วออก
@@ -336,10 +407,10 @@ class FriendService extends ChangeNotifier {
         return user.id != _currentUser?.id && !_friends.any((f) => f.userId == user.id);
       }).toList();
       
-      debugPrint('[FriendService] ✅ ผลลัพธ์หลังกรอง: ${filtered.length} ผู้ใช้');
+      Log.d('[FriendService] ✅ ผลลัพธ์หลังกรอง: ${filtered.length} ผู้ใช้');
       return filtered;
     } catch (e) {
-      debugPrint('[FriendService] Error searching users: $e');
+      Log.d('[FriendService] Error searching users: $e');
       return [];
     }
   }
@@ -360,13 +431,13 @@ class FriendService extends ChangeNotifier {
 
     // ✅ ส่งไปยัง Firebase โดยตรง (ไม่บันทึก local ของผู้ส่ง)
     if (firebaseService.isOnline && firebaseService.isSignedIn) {
-      debugPrint('[FriendService] 📤 กำลังส่งคำขอไปหา: ${targetUser.name} (${targetUser.id})');
+      Log.d('[FriendService] 📤 กำลังส่งคำขอไปหา: ${targetUser.name} (${targetUser.id})');
       final success = await firebaseService.sendFriendRequest(request);
       if (!success) {
-        debugPrint('[FriendService] ❌ ส่งคำขอไม่สำเร็จ');
+        Log.d('[FriendService] ❌ ส่งคำขอไม่สำเร็จ');
         return false;
       }
-      debugPrint('[FriendService] ✅ ส่งคำขอสำเร็จ');
+      Log.d('[FriendService] ✅ ส่งคำขอสำเร็จ');
       return true;
     }
 
@@ -374,7 +445,7 @@ class FriendService extends ChangeNotifier {
     await FriendDB.addFriendRequest(request);
     _friendRequests.add(request);
     notifyListeners();
-    debugPrint('[FriendService] 💾 บันทึกคำขอไว้ใน Local (ออฟไลน์)');
+    Log.d('[FriendService] 💾 บันทึกคำขอไว้ใน Local (ออฟไลน์)');
     return true;
   }
 
@@ -383,12 +454,12 @@ class FriendService extends ChangeNotifier {
     if (_currentUser == null) return false;
 
     try {
-      debugPrint('[FriendService] ✅ เริ่มรับคำขอจาก: ${request.fromUserName}');
+      Log.d('[FriendService] ✅ เริ่มรับคำขอจาก: ${request.fromUserName}');
       
       // ⭐ ตรวจสอบว่าเป็นเพื่อนอยู่แล้วหรือไม่
       final isAlreadyFriend = _friends.any((f) => f.userId == request.fromUserId);
       if (isAlreadyFriend) {
-        debugPrint('[FriendService] ⚠️ ${request.fromUserName} เป็นเพื่อนอยู่แล้ว - ลบคำขอ');
+        Log.d('[FriendService] ⚠️ ${request.fromUserName} เป็นเพื่อนอยู่แล้ว - ลบคำขอ');
         _friendRequests.removeWhere((r) => r.id == request.id);
         await FriendDB.updateFriendRequestStatus(request.id, FriendRequestStatus.accepted);
         
@@ -397,7 +468,7 @@ class FriendService extends ChangeNotifier {
           try {
             await firebaseService.db?.collection('friend_requests').doc(request.id).delete();
           } catch (e) {
-            debugPrint('[FriendService] ⚠️ ไม่สามารถลบคำขอจาก Firebase: $e');
+            Log.d('[FriendService] ⚠️ ไม่สามารถลบคำขอจาก Firebase: $e');
           }
         }
         
@@ -409,10 +480,10 @@ class FriendService extends ChangeNotifier {
       if (firebaseService.isOnline && firebaseService.isSignedIn) {
         final success = await firebaseService.respondToFriendRequest(request.id, true);
         if (!success) {
-          debugPrint('[FriendService] ❌ ส่งการตอบรับไป Firebase ไม่สำเร็จ');
+          Log.d('[FriendService] ❌ ส่งการตอบรับไป Firebase ไม่สำเร็จ');
           return false;
         }
-        debugPrint('[FriendService] ✅ ส่งการตอบรับไป Firebase สำเร็จ');
+        Log.d('[FriendService] ✅ ส่งการตอบรับไป Firebase สำเร็จ');
       }
       
       // ลบคำขอออกจาก local
@@ -432,19 +503,19 @@ class FriendService extends ChangeNotifier {
       // เพิ่มเพื่อนลงท้องถิ่น
       await FriendDB.addFriend(newFriend);
       _friends.add(newFriend);
-      debugPrint('[FriendService] ✅ เพิ่มเพื่อนใน Local แล้ว');
+      Log.d('[FriendService] ✅ เพิ่มเพื่อนใน Local แล้ว');
 
       // 🔥 สำคัญ: Sync กับ Firebase อีกครั้งเพื่อดึงข้อมูลเพื่อนที่ครบถ้วน
       if (firebaseService.isOnline && firebaseService.isSignedIn) {
-        debugPrint('[FriendService] 🔄 กำลัง sync ข้อมูลเพื่อนจาก Firebase...');
+        Log.d('[FriendService] 🔄 กำลัง sync ข้อมูลเพื่อนจาก Firebase...');
         await syncWithFirebase();
-        debugPrint('[FriendService] ✅ sync เสร็จสมบูรณ์');
+        Log.d('[FriendService] ✅ sync เสร็จสมบูรณ์');
       }
 
       notifyListeners();
       return true;
     } catch (e) {
-      debugPrint('[FriendService] ❌ Error accepting friend request: $e');
+      Log.d('[FriendService] ❌ Error accepting friend request: $e');
       return false;
     }
   }
@@ -464,7 +535,7 @@ class FriendService extends ChangeNotifier {
       notifyListeners();
       return true;
     } catch (e) {
-      debugPrint('[FriendService] Error rejecting friend request: $e');
+      Log.d('[FriendService] Error rejecting friend request: $e');
       return false;
     }
   }
@@ -486,7 +557,7 @@ class FriendService extends ChangeNotifier {
       notifyListeners();
       return true;
     } catch (e) {
-      debugPrint('[FriendService] Error removing friend: $e');
+      Log.d('[FriendService] Error removing friend: $e');
       return false;
     }
   }
@@ -565,8 +636,84 @@ class FriendService extends ChangeNotifier {
     return _friends.any((f) => f.userId == userId);
   }
 
+  // [Fix 4] เปิด real-time listener สำหรับคำขอเป็นเพื่อน
+  void _startRequestsListener() {
+    if (_currentUser == null) return;
+    if (firebaseService.db == null) return;
+
+    _requestsListener?.cancel();
+    _requestsListener = firebaseService.db!
+        .collection('friend_requests')
+        .where('toUserId', isEqualTo: _currentUser!.id)
+        .where('status', isEqualTo: 'pending')
+        .snapshots()
+        .listen(
+      (snapshot) => _handleRequestsSnapshot(snapshot),
+      onError: (e) {
+        Log.d('[FriendService] ⚠️ Requests listener error: $e');
+      },
+    );
+
+    Log.d('[FriendService] 🔔 เปิด real-time listener คำขอเป็นเพื่อน');
+  }
+
+  // เปิด real-time listener สำหรับคำขอที่เราส่งไปแล้วถูกอีกฝั่งกดรับ (status=accepted)
+  // เพื่อให้ฝั่งผู้ส่งเพิ่มเพื่อนของตัวเองได้ทันที ไม่ต้องรอ auto sync รอบ 60 วินาที
+  void _startAcceptedSentListener() {
+    if (_currentUser == null) return;
+    if (firebaseService.db == null) return;
+
+    _acceptedSentListener?.cancel();
+    _acceptedSentListener = firebaseService.db!
+        .collection('friend_requests')
+        .where('fromUserId', isEqualTo: _currentUser!.id)
+        .where('status', isEqualTo: 'accepted')
+        .snapshots()
+        .listen(
+      (snapshot) => _handleAcceptedSentSnapshot(snapshot),
+      onError: (e) {
+        Log.d('[FriendService] ⚠️ Accepted-sent listener error: $e');
+      },
+    );
+
+    Log.d('[FriendService] 🔔 เปิด real-time listener คำขอที่ถูกรับ (ฝั่งผู้ส่ง)');
+  }
+
+  void _handleAcceptedSentSnapshot(QuerySnapshot snapshot) {
+    if (snapshot.docs.isEmpty) return;
+    Log.d('[FriendService] 🔔 Real-time: คำขอที่ส่งไปถูกรับแล้ว ${snapshot.docs.length} รายการ');
+    syncWithFirebase();
+  }
+
+  void _handleRequestsSnapshot(QuerySnapshot snapshot) {
+    final updated = <FriendRequest>[];
+
+    for (final doc in snapshot.docs) {
+      try {
+        final request = FriendRequest.fromJson(doc.data() as Map<String, dynamic>);
+        final isAlreadyFriend = _friends.any((f) => f.userId == request.fromUserId);
+        if (!isAlreadyFriend) {
+          updated.add(request);
+        }
+      } catch (e) {
+        Log.d('[FriendService] ⚠️ Error parsing request: $e');
+      }
+    }
+
+    _friendRequests
+      ..clear()
+      ..addAll(updated);
+    FriendDB.saveFriendRequests(_friendRequests);
+    Log.d('[FriendService] 🔔 Real-time: ${_friendRequests.length} คำขอ');
+    notifyListeners();
+  }
+
   /// ล้างข้อมูลทั้งหมด (สำหรับออกจากระบบ)
   Future<void> clearAllData() async {
+    _requestsListener?.cancel();
+    _requestsListener = null;
+    _acceptedSentListener?.cancel();
+    _acceptedSentListener = null;
     _friends.clear();
     _friendRequests.clear();
     _currentUser = null;

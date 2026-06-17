@@ -11,18 +11,6 @@ enum MessageStatus {
   synced,    // ✓✓✓ ซิงก์ขึ้น Cloud แล้ว
 }
 
-// TODO: เพิ่มระบบคิวข้อความในเครื่อง (Local Queue)
-// - เก็บข้อความที่ส่งไม่สำเร็จไว้ในคิว
-// - ส่งใหม่อัตโนมัติเมื่อเชื่อมต่อได้
-// - บันทึกลง SharedPreferences/SQLite
-//
-// TODO: เพิ่มระบบซิงก์ข้อความขึ้น Firebase Cloud
-// - เมื่อออนไลน์ ให้ซิงก์ข้อความจากคิวขึ้น Cloud
-// - อัพเดทสถานะเป็น 'synced' เมื่อซิงก์สำเร็จ
-//
-// TODO: เพิ่ม UI แสดงสถานะข้อความในช่องแชท
-// - แสดงไอคอน: ⏳ (pending), ✓ (sent), ✓✓ (delivered), ☁️ (synced)
-// - แสดงข้อความ retry สำหรับข้อความที่ส่งไม่สำเร็จ
 
 class ChatMessage {
   final String id;
@@ -34,6 +22,7 @@ class ChatMessage {
   final DateTime time;
   final bool isEmergency;
   final MessageStatus status; // เพิ่มสถานะข้อความ
+  final bool isRead; // อ่านแล้วหรือยัง (ใช้นับ unread ในห้องแชท)
 
   ChatMessage({
     required this.id,
@@ -45,6 +34,7 @@ class ChatMessage {
     required this.time,
     this.isEmergency = false,
     this.status = MessageStatus.sent, // default เป็น sent
+    this.isRead = true, // default อ่านแล้ว (ข้อความเก่า/ของเราเอง)
   });
 
   // Convert to JSON for storage/transmission
@@ -59,6 +49,7 @@ class ChatMessage {
       'time': time.toIso8601String(),
       'isEmergency': isEmergency,
       'status': status.toString().split('.').last,
+      'isRead': isRead,
     };
   }
 
@@ -101,6 +92,7 @@ class ChatMessage {
       time: parseTime(json['time']),
       isEmergency: json['isEmergency'] as bool? ?? false,
       status: parseStatus(json['status']),
+      isRead: json['isRead'] as bool? ?? true,
     );
   }
 
@@ -120,6 +112,7 @@ class ChatMessage {
     DateTime? time,
     bool? isEmergency,
     MessageStatus? status,
+    bool? isRead,
   }) {
     return ChatMessage(
       id: id ?? this.id,
@@ -131,6 +124,7 @@ class ChatMessage {
       time: time ?? this.time,
       isEmergency: isEmergency ?? this.isEmergency,
       status: status ?? this.status,
+      isRead: isRead ?? this.isRead,
     );
   }
 }
@@ -245,5 +239,7 @@ class FriendChatMessage {
   bool get hasImage => type == ChatType.image && (filePath != null || fileUrl != null);
   bool get hasVideo => type == ChatType.video && (filePath != null || fileUrl != null);
   bool get hasText => type == ChatType.text && text != null;
-  bool get isFromMe => fromUserId == 'me'; // ต้องเปรียบเทียบกับ current user ID
+  // NOTE: ใช้เปรียบเทียบกับ friendService.currentUser?.id ที่ call site แทน getter นี้
+  // เพราะ getter นี้ไม่รู้จัก current user ID ณ รันไทม์
+  bool isFromUser(String currentUserId) => fromUserId == currentUserId;
 }

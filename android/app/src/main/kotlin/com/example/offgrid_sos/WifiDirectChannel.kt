@@ -18,13 +18,26 @@ import android.util.Log
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import org.json.JSONObject
+import java.io.DataInputStream
+import java.io.DataOutputStream
+import java.io.EOFException
+import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
-import java.io.InputStream
-import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import kotlin.concurrent.thread
+
+/// ข้อมูลไฟล์ที่กำลังรับอยู่ (ต่อ socket หนึ่งตัว)
+private class IncomingFile(
+    val name: String,
+    val size: Long,
+    val path: String,
+    val out: FileOutputStream,
+    var written: Long = 0
+)
 
 class WifiDirectChannel(private val activity: Activity) {
     private val TAG = "WifiDirectChannel"
@@ -38,6 +51,15 @@ class WifiDirectChannel(private val activity: Activity) {
     private var isConnected = false // 🔧 Track connection status
     private var customDeviceName: String = "WiFi Device" // 🔧 Custom device name
     private val PORT = 8888
+
+    // 📦 Framed wire protocol: [1 byte type][4 byte length BE][payload]
+    // ทำให้แยกข้อความ/ไฟล์บน stream เดียวกันได้แน่นอน ไม่พึ่ง buffer ขนาดคงที่แบบเดิม
+    private val FRAME_TEXT = 1
+    private val FRAME_FILE_META = 2
+    private val FRAME_FILE_DATA = 3
+
+    // ไฟล์ที่กำลังรับอยู่ ต่อ socket (รองรับหลาย client พร้อมกัน)
+    private val incomingFiles = mutableMapOf<Socket, IncomingFile>()
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -365,43 +387,133 @@ class WifiDirectChannel(private val activity: Activity) {
 
     private fun handleClient(socket: Socket?) {
         if (socket == null) return
-        
+
         // 🔧 Track connection status
         isConnected = true
         connectedClients.add(socket)
         Log.d(TAG, "✅ Client connected from ${socket.inetAddress.hostAddress} - Total clients: ${connectedClients.size}")
-        
+
         try {
-            val inputStream: InputStream = socket.getInputStream()
-            val buffer = ByteArray(1024)
-            
+            val input = DataInputStream(socket.getInputStream())
+
             while (true) {
-                val bytesRead = inputStream.read(buffer)
-                if (bytesRead == -1) break
-                
-                val message = String(buffer, 0, bytesRead)
-                Log.d(TAG, "📥 Received message: $message")
-                
-                // Send message to Flutter
-                activity.runOnUiThread {
-                    val data = mapOf(
-                        "type" to "message",
-                        "fromPeerId" to socket.inetAddress.hostAddress,
-                        "body" to message
-                    )
-                    eventSink?.success(data)
+                val type = input.readByte().toInt()
+                val length = input.readInt()
+                val payload = ByteArray(length)
+                input.readFully(payload)
+
+                when (type) {
+                    FRAME_TEXT -> {
+                        val message = String(payload, Charsets.UTF_8)
+                        Log.d(TAG, "📥 Received message: $message")
+                        activity.runOnUiThread {
+                            eventSink?.success(mapOf(
+                                "type" to "message",
+                                "fromPeerId" to socket.inetAddress.hostAddress,
+                                "body" to message
+                            ))
+                        }
+                    }
+                    FRAME_FILE_META -> {
+                        try {
+                            val meta = JSONObject(String(payload, Charsets.UTF_8))
+                            val name = meta.getString("name")
+                            val size = meta.getLong("size")
+                            val dir = File(activity.cacheDir, "wifi_direct_received")
+                            if (!dir.exists()) dir.mkdirs()
+                            val destPath = "${dir.path}/${System.currentTimeMillis()}_$name"
+                            incomingFiles[socket] = IncomingFile(name, size, destPath, FileOutputStream(destPath))
+                            Log.d(TAG, "📋 รับ metadata ไฟล์: $name ($size bytes)")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "❌ Parse file metadata ล้มเหลว: ${e.message}")
+                        }
+                    }
+                    FRAME_FILE_DATA -> {
+                        val state = incomingFiles[socket]
+                        if (state == null) {
+                            Log.w(TAG, "⚠️ ได้รับ file data แต่ไม่มี metadata มาก่อน - ข้าม")
+                        } else {
+                            state.out.write(payload)
+                            state.written += payload.size
+                            if (state.written >= state.size) {
+                                state.out.flush()
+                                state.out.close()
+                                incomingFiles.remove(socket)
+                                Log.d(TAG, "✅ รับไฟล์เสร็จสมบูรณ์: ${state.path} (${state.written} bytes)")
+                                activity.runOnUiThread {
+                                    eventSink?.success(mapOf(
+                                        "type" to "file",
+                                        "fromPeerId" to socket.inetAddress.hostAddress,
+                                        "filePath" to state.path,
+                                        "name" to state.name
+                                    ))
+                                }
+                            }
+                        }
+                    }
+                    else -> Log.w(TAG, "⚠️ Unknown frame type: $type")
                 }
             }
+        } catch (e: EOFException) {
+            // ปลายทางปิด socket ตามปกติ
         } catch (e: IOException) {
             Log.e(TAG, "❌ Error reading from socket: ${e.message}")
         } finally {
             connectedClients.remove(socket)
+            incomingFiles.remove(socket)?.out?.let { out ->
+                try { out.close() } catch (_: IOException) {}
+            }
             socket.close()
             if (connectedClients.isEmpty() && clientSocket == null) {
                 isConnected = false
             }
             Log.d(TAG, "🔌 Client disconnected - Remaining clients: ${connectedClients.size}")
         }
+    }
+
+    /// เขียน frame หนึ่งชุดลง socket ที่ระบุ คืนค่า true ถ้าสำเร็จ
+    private fun writeFrame(socket: Socket, type: Int, payload: ByteArray): Boolean {
+        return try {
+            val out = DataOutputStream(socket.getOutputStream())
+            out.writeByte(type)
+            out.writeInt(payload.size)
+            out.write(payload)
+            out.flush()
+            true
+        } catch (e: IOException) {
+            Log.e(TAG, "❌ writeFrame failed (${socket.inetAddress?.hostAddress}): ${e.message}")
+            false
+        }
+    }
+
+    /// ส่ง frame ไปยังทุก socket ที่เชื่อมต่ออยู่ (client socket ของเรา + connected clients ฝั่ง server)
+    /// คืนค่า true ถ้าส่งสำเร็จไปยังอย่างน้อยหนึ่งปลายทาง
+    private fun sendFrameToPeers(type: Int, payload: ByteArray): Boolean {
+        var sent = false
+
+        clientSocket?.let { socket ->
+            if (writeFrame(socket, type, payload)) {
+                sent = true
+            } else {
+                try { socket.close() } catch (_: IOException) {}
+                clientSocket = null
+            }
+        }
+
+        val clientsToRemove = mutableListOf<Socket>()
+        connectedClients.forEach { socket ->
+            if (writeFrame(socket, type, payload)) {
+                sent = true
+            } else {
+                clientsToRemove.add(socket)
+            }
+        }
+        clientsToRemove.forEach { socket ->
+            connectedClients.remove(socket)
+            try { socket.close() } catch (_: IOException) {}
+        }
+
+        return sent
     }
 
     private fun sendMessageToPeer(message: String) {
@@ -411,55 +523,67 @@ class WifiDirectChannel(private val activity: Activity) {
                 Log.w(TAG, "⚠️ Cannot send message - not connected. isConnected=$isConnected")
                 return@thread
             }
-            
-            var sent = false
-            
+
+            val sent = sendFrameToPeers(FRAME_TEXT, message.toByteArray(Charsets.UTF_8))
+            if (sent) {
+                Log.d(TAG, "📤 Message sent: $message")
+            } else {
+                Log.w(TAG, "⚠️ No active connection to send message")
+            }
+        }
+    }
+
+    /// ส่งไฟล์จริงผ่าน socket: ส่ง metadata (ชื่อ+ขนาด) ก่อน แล้วค่อยส่ง binary แบบ chunk
+    fun sendFile(call: MethodCall, result: MethodChannel.Result) {
+        val filePath = call.argument<String>("filePath")
+        if (filePath == null) {
+            result.error("INVALID_ARGS", "filePath is required", null)
+            return
+        }
+
+        thread {
             try {
-                // 📤 ส่งไปยัง client socket (ถ้าเราเป็น client)
-                clientSocket?.let { socket ->
-                    try {
-                        val outputStream: OutputStream = socket.getOutputStream()
-                        outputStream.write(message.toByteArray())
-                        outputStream.flush()
-                        Log.d(TAG, "📤 Message sent (as client): $message")
-                        sent = true
-                    } catch (e: IOException) {
-                        Log.e(TAG, "❌ Failed to send as client: ${e.message}")
-                        clientSocket?.close()
-                        clientSocket = null
+                if (!isConnected) {
+                    Handler(Looper.getMainLooper()).post {
+                        result.error("NOT_CONNECTED", "ยังไม่ได้เชื่อมต่อกับ peer", null)
+                    }
+                    return@thread
+                }
+
+                val file = File(filePath)
+                if (!file.exists()) {
+                    Handler(Looper.getMainLooper()).post {
+                        result.error("FILE_NOT_FOUND", "File not found: $filePath", null)
+                    }
+                    return@thread
+                }
+
+                val name = file.name
+                val size = file.length()
+                val meta = JSONObject().apply {
+                    put("name", name)
+                    put("size", size)
+                }
+                sendFrameToPeers(FRAME_FILE_META, meta.toString().toByteArray(Charsets.UTF_8))
+
+                val chunkSize = 64 * 1024
+                val buffer = ByteArray(chunkSize)
+                file.inputStream().use { input ->
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read <= 0) break
+                        val chunk = if (read == buffer.size) buffer else buffer.copyOf(read)
+                        sendFrameToPeers(FRAME_FILE_DATA, chunk)
                     }
                 }
-                
-                // 📤 ส่งไปยังทุก connected clients (ถ้าเราเป็น server)
-                val clientsToRemove = mutableListOf<Socket>()
-                connectedClients.forEach { socket ->
-                    try {
-                        val outputStream: OutputStream = socket.getOutputStream()
-                        outputStream.write(message.toByteArray())
-                        outputStream.flush()
-                        Log.d(TAG, "📤 Message sent (as server): $message")
-                        sent = true
-                    } catch (e: IOException) {
-                        Log.e(TAG, "❌ Failed to send to client ${socket.inetAddress.hostAddress}: ${e.message}")
-                        clientsToRemove.add(socket)
-                    }
+
+                Log.d(TAG, "✅ ส่งไฟล์เสร็จสมบูรณ์: $name ($size bytes)")
+                Handler(Looper.getMainLooper()).post { result.success(true) }
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ sendFile failed: ${e.message}")
+                Handler(Looper.getMainLooper()).post {
+                    result.error("SEND_FILE_FAILED", e.message, null)
                 }
-                
-                // ลบ clients ที่ disconnect ออก
-                clientsToRemove.forEach { socket ->
-                    connectedClients.remove(socket)
-                    try {
-                        socket.close()
-                    } catch (e: IOException) {
-                        // Ignore
-                    }
-                }
-                
-                if (!sent) {
-                    Log.w(TAG, "⚠️ No active connection to send message")
-                }
-            } catch (e: IOException) {
-                Log.e(TAG, "❌ Error sending message: ${e.message}")
             }
         }
     }

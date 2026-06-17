@@ -1,27 +1,34 @@
-// lib/ui/chat_history_screen.dart
+﻿// lib/ui/chat_history_screen.dart
 import 'package:flutter/material.dart';
 import '../core/chat_models.dart';
 import '../core/chat_db.dart';
-import '../core/friend_service.dart'; // สำหรับ global friendService
-import '../core/transport.dart'; // สำหรับ Peer class
-import '../core/app_state.dart'; // สำหรับ global appState
-import '../core/device_id_manager.dart'; // สำหรับ Device ID
-import 'emergency_chat_screen.dart'; // สำหรับเปิดห้องแชท
+import '../core/friend_service.dart';
+import '../core/friend_models.dart';
+import '../core/transport.dart';
+import '../core/app_state.dart';
+import '../core/device_id_manager.dart';
+import 'emergency_chat_screen.dart';
+import 'friend_chat_screen.dart';
+import 'package:offgrid_sos/core/logger.dart';
 
 /// Model สำหรับเก็บข้อมูลห้องแชท
 class ChatRoom {
   final String peerId;
   final String peerName;
   final ChatMessage? lastMessage;
+  final String? lastMessageText; // สำหรับ friend chats ที่ไม่มี ChatMessage
   final int unreadCount;
   final DateTime lastMessageTime;
+  final Friend? friend; // null = emergency/nearby, non-null = friend chat
 
   ChatRoom({
     required this.peerId,
     required this.peerName,
     this.lastMessage,
+    this.lastMessageText,
     this.unreadCount = 0,
     required this.lastMessageTime,
+    this.friend,
   });
 }
 
@@ -35,11 +42,45 @@ class ChatHistoryScreen extends StatefulWidget {
 
 class _ChatHistoryScreenState extends State<ChatHistoryScreen> {
   List<ChatRoom> _chatRooms = [];
+  List<ChatMessage> _allMessages = [];
   bool _isLoading = true;
+  int _lastMessageCount = -1;
 
   @override
   void initState() {
     super.initState();
+    appState.addListener(_onAppStateChanged);
+    friendService.addListener(_onFriendServiceChanged);
+    _loadChatRooms();
+  }
+
+  @override
+  void dispose() {
+    appState.removeListener(_onAppStateChanged);
+    friendService.removeListener(_onFriendServiceChanged);
+    super.dispose();
+  }
+
+  void _onAppStateChanged() {
+    final count = appState.chatMessages.length;
+    if (count != _lastMessageCount) {
+      _lastMessageCount = count;
+      _loadChatRooms();
+    }
+  }
+
+  void _onFriendServiceChanged() {
+    if (friendService.currentUser == null) {
+      // user logout — clear immediately
+      if (mounted) {
+        setState(() {
+          _chatRooms = [];
+          _allMessages = [];
+          _isLoading = false;
+        });
+      }
+      return;
+    }
     _loadChatRooms();
   }
 
@@ -47,104 +88,111 @@ class _ChatHistoryScreenState extends State<ChatHistoryScreen> {
     setState(() => _isLoading = true);
     try {
       final userId = friendService.currentUser?.id ?? 'anonymous';
-      
-      // ดึง Device ID ปัจจุบัน (อาจเป็น device ID หรือ user ID)
       final myDeviceId = await DeviceIdManager.getCurrentId();
-      
+
+      // ดึงข้อความทั้งหมดในคำสั่ง SQL เดียว — ไม่มี N+1 query อีกต่อไป
+      // ChatMessage.from = sender, ChatMessage.receiver = receiver (ถูก map ใน _mapsToChatMessages)
       final messages = await ChatDB.getMessages(userId);
-      
-      // จัดกลุ่มข้อความตาม peer (ใช้คู่สนทนาแทนการแยก sender/receiver)
+
+      // จัดกลุ่มข้อความตาม peer โดยใช้ข้อมูลจาก ChatMessage โดยตรง
       final Map<String, List<ChatMessage>> groupedMessages = {};
-      
+
       for (final msg in messages) {
-        String? peerId;
-        
-        // ดึง peerId จากฐานข้อมูล
-        final database = await ChatDB.db;
-        final msgData = await database.query(
-          'chat_messages',
-          where: 'id = ?',
-          whereArgs: [msg.id],
-          limit: 1,
-        );
-        
-        if (msgData.isNotEmpty) {
-          final sender = msgData.first['sender'] as String?;
-          final receiver = msgData.first['receiver'] as String?;
-          
-          // 🔄 หา peer ID โดยดูว่าใครที่ไม่ใช่เรา
-          // ถ้า sender เป็นเรา → peer คือ receiver
-          // ถ้า sender ไม่ใช่เรา → peer คือ sender
-          if (sender == myDeviceId || sender == userId || sender == 'me') {
-            peerId = receiver;
-          } else {
-            peerId = sender;
-          }
+        // msg.from = sender, msg.receiver = receiver — ไม่ต้อง query DB ซ้ำ
+        final String? peerId;
+        if (msg.from == myDeviceId || msg.from == userId || msg.from == 'me') {
+          peerId = msg.receiver; // เราเป็นคนส่ง → peer คือ receiver
+        } else {
+          peerId = msg.from; // peer เป็นคนส่ง → peer คือ sender
         }
-        
+
         if (peerId == null || peerId.isEmpty) continue;
-        
-        // 🎯 Key point: ใช้ peerId เดียวกันสำหรับทั้งส่งและรับ
-        if (!groupedMessages.containsKey(peerId)) {
-          groupedMessages[peerId] = [];
-        }
-        groupedMessages[peerId]!.add(msg);
+
+        groupedMessages.putIfAbsent(peerId, () => []).add(msg);
       }
-      
-      // สร้างรายการห้องแชท
-      final List<ChatRoom> rooms = [];
-      for (final entry in groupedMessages.entries) {
-        final peerId = entry.key;
-        final messages = entry.value;
-        
-        // เรียงตามเวลาเพื่อหาข้อความล่าสุด
-        messages.sort((a, b) => b.time.compareTo(a.time));
-        final lastMessage = messages.first;
-        
-        // หาชื่อ peer จาก appState.peers (nearby connections)
-        // ถ้าไม่เจอ → ดึงจาก SQLite peers table (ชื่อที่บันทึกไว้)
-        String peerName = peerId;
-        
-        // ลองหาจาก peers ที่เชื่อมต่ออยู่
-        final peer = appState.peers.firstWhere(
+
+      // ดึงชื่อ peer ทั้งหมดพร้อมกัน (batch query 1 ครั้ง แทนการ query ทีละ peer)
+      final allPeerIds = groupedMessages.keys.toList();
+      final peerNameCache = <String, String>{};
+      for (final peerId in allPeerIds) {
+        final live = appState.peers.firstWhere(
           (p) => p.id == peerId,
           orElse: () => Peer(id: '', name: ''),
         );
-        
-        if (peer.id.isNotEmpty && peer.name.isNotEmpty) {
-          peerName = peer.name;
+        if (live.id.isNotEmpty && live.name.isNotEmpty) {
+          peerNameCache[peerId] = live.name;
         } else {
-          // ดึงชื่อจาก SQLite peers table (ชื่อที่บันทึกไว้)
-          final savedName = await ChatDB.getPeerName(peerId);
-          if (savedName != null && savedName.isNotEmpty) {
-            peerName = savedName;
-          } else {
-            // ถ้าไม่มีเลย ใช้ peerId แบบย่อ
-            peerName = 'ID: ${peerId.substring(0, peerId.length > 8 ? 8 : peerId.length)}...';
-          }
+          final saved = await ChatDB.getPeerName(peerId);
+          peerNameCache[peerId] = saved?.isNotEmpty == true
+              ? saved!
+              : 'ID: ${peerId.substring(0, peerId.length > 8 ? 8 : peerId.length)}...';
         }
-        
-        // นับข้อความที่ยังไม่ได้อ่าน (ถ้ามี unread flag)
-        final unreadCount = 0; // TODO: implement unread count
-        
+      }
+
+      // สร้างรายการห้องแชท (emergency/nearby จาก ChatDB)
+      final List<ChatRoom> rooms = [];
+      for (final entry in groupedMessages.entries) {
+        final peerId = entry.key;
+        final msgs = entry.value..sort((a, b) => b.time.compareTo(a.time));
+        final lastMessage = msgs.first;
+        final unreadCount = msgs.where((m) => m.from == peerId && !m.isRead).length;
+
         rooms.add(ChatRoom(
           peerId: peerId,
-          peerName: peerName,
+          peerName: peerNameCache[peerId] ?? peerId,
           lastMessage: lastMessage,
           unreadCount: unreadCount,
           lastMessageTime: lastMessage.time,
         ));
       }
-      
-      // เรียงตามเวลาล่าสุด
+
+      // รวม friend chats — โหลดจาก Firebase ผ่าน loadFriendChatMessages
+      // เพื่อให้ B เห็น history ที่ A ส่งมา แม้ B เพิ่งลงชื่อเข้าใช้
+      if (friendService.friends.isNotEmpty) {
+        await Future.wait(
+          friendService.friends.map((f) => appState.loadFriendChatMessages(f.userId)),
+        );
+      }
+
+      final myUserId = friendService.currentUser?.id ?? '';
+      for (final friend in friendService.friends) {
+        // ไม่ซ้ำกับ emergency room ที่ peerId เดียวกัน
+        if (rooms.any((r) => r.peerId == friend.userId)) continue;
+
+        final msgs = appState.friendChats[friend.userId] ?? [];
+
+        // ถ้าไม่มีข้อความเลย และ lastMessage ใน friend record ก็ว่าง — ข้าม
+        if (msgs.isEmpty && friend.lastMessage == null && friend.lastMessageTime == null) continue;
+
+        final lastMsg = msgs.isNotEmpty ? msgs.last : null;
+        final lastText = lastMsg?.text ??
+            (lastMsg?.type == ChatType.image
+                ? '📷 รูปภาพ'
+                : lastMsg?.type == ChatType.video
+                    ? '🎥 วิดีโอ'
+                    : friend.lastMessage);
+
+        final unread = msgs.where((m) => m.toUserId == myUserId && !m.isRead).length;
+
+        rooms.add(ChatRoom(
+          peerId: friend.userId,
+          peerName: friend.name,
+          lastMessageText: lastText,
+          unreadCount: unread > 0 ? unread : friend.unreadCount,
+          lastMessageTime: lastMsg?.time ?? friend.lastMessageTime ?? friend.lastSeen,
+          friend: friend,
+        ));
+      }
+
       rooms.sort((a, b) => b.lastMessageTime.compareTo(a.lastMessageTime));
-      
+
       setState(() {
         _chatRooms = rooms;
+        _allMessages = messages;
         _isLoading = false;
       });
     } catch (e) {
-      debugPrint('Error loading chat rooms: $e');
+      Log.d('Error loading chat rooms: $e');
       setState(() => _isLoading = false);
     }
   }
@@ -174,8 +222,11 @@ class _ChatHistoryScreenState extends State<ChatHistoryScreen> {
     
     if (confirmed == true) {
       try {
-        // ลบข้อความทั้งหมดจากห้องแชทนี้
-        await ChatDB.deleteConversation(userId, room.peerId);
+        if (room.friend != null) {
+          await appState.clearFriendChat(room.friend!.userId);
+        } else {
+          await ChatDB.deleteConversation(userId, room.peerId);
+        }
         
         // Reload รายการ
         _loadChatRooms();
@@ -189,7 +240,7 @@ class _ChatHistoryScreenState extends State<ChatHistoryScreen> {
           );
         }
       } catch (e) {
-        debugPrint('Error deleting chat room: $e');
+        Log.d('Error deleting chat room: $e');
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -203,24 +254,23 @@ class _ChatHistoryScreenState extends State<ChatHistoryScreen> {
   }
 
   void _openChatRoom(ChatRoom room) {
-    // สร้าง Peer object จาก room
-    final peer = Peer(
-      id: room.peerId,
-      name: room.peerName,
-    );
-    
-    // เปิดห้องแชทกับ peer นี้
+    if (room.friend != null) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => FriendChatScreen(friend: room.friend!),
+        ),
+      ).then((_) => _loadChatRooms());
+      return;
+    }
+
+    final peer = Peer(id: room.peerId, name: room.peerName);
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => EmergencyChatScreen(
-          peer: peer,
-        ),
+        builder: (context) => EmergencyChatScreen(peer: peer),
       ),
-    ).then((_) {
-      // Reload เมื่อกลับมา
-      _loadChatRooms();
-    });
+    ).then((_) => _loadChatRooms());
   }
 
   String _formatTime(DateTime time) {
@@ -265,79 +315,74 @@ class _ChatHistoryScreenState extends State<ChatHistoryScreen> {
   }
 
   Widget _buildSummaryCard(ColorScheme cs) {
+    // ใช้ _allMessages ที่โหลดพร้อมกับ rooms — ไม่ต้อง query DB ซ้ำ
+    final pendingCount = _allMessages.where((m) => m.status == MessageStatus.pending).length;
+    final sentCount = _allMessages.where((m) => m.status == MessageStatus.sent).length;
+    final syncedCount = _allMessages.where((m) => m.status == MessageStatus.synced).length;
+    final emergencyCount = _allMessages.where((m) => m.isEmergency).length;
+
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Card(
         elevation: 2,
         child: Padding(
           padding: const EdgeInsets.all(16),
-          child: FutureBuilder<List<ChatMessage>>(
-            future: ChatDB.getMessages(friendService.currentUser?.id ?? 'anonymous'),
-            builder: (context, snapshot) {
-              final allMessages = snapshot.data ?? [];
-              final pendingCount = allMessages.where((m) => m.status == MessageStatus.pending).length;
-              final sentCount = allMessages.where((m) => m.status == MessageStatus.sent).length;
-              final syncedCount = allMessages.where((m) => m.status == MessageStatus.synced).length;
-              final emergencyCount = allMessages.where((m) => m.isEmergency).length;
-              
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'สถานะข้อความ',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: cs.primary,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
                 children: [
-                  Text(
-                    'สถานะข้อความ',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: cs.primary,
+                  Expanded(
+                    child: _StatCard(
+                      icon: Icons.schedule,
+                      label: 'รอส่ง',
+                      value: '$pendingCount',
+                      color: Colors.orange,
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _StatCard(
-                          icon: Icons.schedule,
-                          label: 'รอส่ง',
-                          value: '$pendingCount',
-                          color: Colors.orange,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: _StatCard(
-                          icon: Icons.check,
-                          label: 'ส่งแล้ว',
-                          value: '$sentCount',
-                          color: Colors.blue,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _StatCard(
-                          icon: Icons.cloud_done,
-                          label: 'ซิงก์แล้ว',
-                          value: '$syncedCount',
-                          color: Colors.green,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: _StatCard(
-                          icon: Icons.warning_amber,
-                          label: 'ฉุกเฉิน',
-                          value: '$emergencyCount',
-                          color: Colors.red,
-                        ),
-                      ),
-                    ],
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _StatCard(
+                      icon: Icons.check,
+                      label: 'ส่งแล้ว',
+                      value: '$sentCount',
+                      color: Colors.blue,
+                    ),
                   ),
                 ],
-              );
-            },
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: _StatCard(
+                      icon: Icons.cloud_done,
+                      label: 'ซิงก์แล้ว',
+                      value: '$syncedCount',
+                      color: Colors.green,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _StatCard(
+                      icon: Icons.warning_amber,
+                      label: 'ฉุกเฉิน',
+                      value: '$emergencyCount',
+                      color: Colors.red,
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
         ),
       ),
@@ -351,53 +396,7 @@ class _ChatHistoryScreenState extends State<ChatHistoryScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('แชท'),
-        actions: [
-          // ปุ่ม Force Sync
-          IconButton(
-            icon: const Icon(Icons.cloud_sync),
-            onPressed: () async {
-              // แสดง loading
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Row(
-                    children: [
-                      SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                      ),
-                      SizedBox(width: 12),
-                      Text('กำลังซิงก์กับ Firebase...'),
-                    ],
-                  ),
-                  duration: Duration(seconds: 2),
-                ),
-              );
-              
-              // Force sync
-              await appState.forceSyncWithFirebase();
-              
-              // โหลดข้อมูลใหม่
-              await _loadChatRooms();
-              
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('✅ ซิงก์เสร็จสิ้น'),
-                    duration: Duration(seconds: 1),
-                  ),
-                );
-              }
-            },
-            tooltip: 'Force Sync กับ Firebase',
-          ),
-          // ปุ่ม Refresh
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadChatRooms,
-            tooltip: 'รีเฟรช',
-          ),
-        ],
+        actions: const [],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
@@ -434,15 +433,9 @@ class _ChatHistoryScreenState extends State<ChatHistoryScreen> {
                   onRefresh: _loadChatRooms,
                   child: ListView.builder(
                     padding: const EdgeInsets.symmetric(vertical: 8),
-                    itemCount: _chatRooms.length + 1, // +1 สำหรับ summary card
+                    itemCount: _chatRooms.length,
                     itemBuilder: (context, index) {
-                      // Summary card ที่ index 0
-                      if (index == 0) {
-                        return _buildSummaryCard(cs);
-                      }
-                      
-                      // Chat rooms
-                      final room = _chatRooms[index - 1];
+                      final room = _chatRooms[index];
                       final lastMsg = room.lastMessage;
                       
                       return InkWell(
@@ -463,14 +456,18 @@ class _ChatHistoryScreenState extends State<ChatHistoryScreen> {
                           ),
                           child: Row(
                             children: [
-                              // Avatar
+                              // Avatar — เพื่อนใช้ไอคอน person_outline สีเขียว, emergency ใช้ไอคอน wifi สีแดง
                               CircleAvatar(
                                 radius: 28,
-                                backgroundColor: cs.primaryContainer,
+                                backgroundColor: room.friend != null
+                                    ? Colors.green.withOpacity(0.15)
+                                    : cs.primaryContainer,
                                 child: Icon(
-                                  Icons.person,
+                                  room.friend != null ? Icons.person_outline : Icons.wifi,
                                   size: 30,
-                                  color: cs.onPrimaryContainer,
+                                  color: room.friend != null
+                                      ? Colors.green
+                                      : cs.onPrimaryContainer,
                                 ),
                               ),
                               const SizedBox(width: 12),
@@ -514,11 +511,11 @@ class _ChatHistoryScreenState extends State<ChatHistoryScreen> {
                                           ),
                                           const SizedBox(width: 4),
                                         ],
-                                        
+
                                         // ข้อความล่าสุด
                                         Expanded(
                                           child: Text(
-                                            lastMsg?.text ?? lastMsg?.type.name ?? '',
+                                            room.lastMessageText ?? lastMsg?.text ?? lastMsg?.type.name ?? '',
                                             style: TextStyle(
                                               fontSize: 14,
                                               color: cs.onSurface.withOpacity(0.7),
@@ -527,9 +524,30 @@ class _ChatHistoryScreenState extends State<ChatHistoryScreen> {
                                             overflow: TextOverflow.ellipsis,
                                           ),
                                         ),
-                                        
+
+                                        // Unread badge
+                                        if (room.unreadCount > 0) ...[
+                                          const SizedBox(width: 6),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                                            decoration: BoxDecoration(
+                                              color: cs.primary,
+                                              borderRadius: BorderRadius.circular(12),
+                                            ),
+                                            child: Text(
+                                              room.unreadCount > 99 ? '99+' : '${room.unreadCount}',
+                                              style: TextStyle(
+                                                color: cs.onPrimary,
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+
                                         // Emergency badge
-                                        if (lastMsg?.isEmergency == true)
+                                        if (lastMsg?.isEmergency == true) ...[
+                                          const SizedBox(width: 4),
                                           Container(
                                             padding: const EdgeInsets.symmetric(
                                               horizontal: 6,
@@ -548,6 +566,7 @@ class _ChatHistoryScreenState extends State<ChatHistoryScreen> {
                                               ),
                                             ),
                                           ),
+                                        ],
                                       ],
                                     ),
                                   ],
