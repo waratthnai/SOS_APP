@@ -499,14 +499,13 @@ class MeshTransport implements Transport {
   void _startPeriodicScan() {
     _scanTimer = Timer.periodic(const Duration(seconds: 20), (_) async {
       if (_baseTransport.discoveryState == DiscoveryState.scanning) {
-        Log.d('📡 [MESH] Periodic scan: refreshing device discovery...');
+        Log.d('📡 [MESH] Periodic scan: restarting device discovery...');
         try {
-          // รีเฟรช discovery เพื่อหาอุปกรณ์ใหม่ (ไม่หยุด-เริ่มใหม่ เพื่อไม่ให้ disconnect)
-          // เพียงแค่ส่งคำขอ scan ใหม่
-          Log.d('📡 [MESH] Triggering new scan without stopping...');
-          Log.d('📡 [MESH] ✅ Scan refresh triggered');
+          await _baseTransport.stopDiscovery();
+          await _baseTransport.startDiscovery();
+          Log.d('📡 [MESH] ✅ Scan restarted successfully');
         } catch (e) {
-          Log.d('❌ [MESH] Error refreshing scan: $e');
+          Log.d('❌ [MESH] Error restarting scan: $e');
         }
       }
     });
