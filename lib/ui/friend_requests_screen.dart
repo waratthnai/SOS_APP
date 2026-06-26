@@ -40,7 +40,7 @@ class _FriendRequestsScreenState extends State<FriendRequestsScreen> {
     final cs = Theme.of(context).colorScheme;
     
     return Scaffold(
-      backgroundColor: cs.background,
+      backgroundColor: cs.surface,
       appBar: AppBar(
         title: const Text('คำขอเป็นเพื่อน', style: TextStyle(fontWeight: FontWeight.bold)),
         backgroundColor: cs.surface,
@@ -76,14 +76,14 @@ class _FriendRequestsScreenState extends State<FriendRequestsScreen> {
                   Icon(
                     Icons.people_outline,
                     size: 80,
-                    color: cs.onBackground.withOpacity(0.5),
+                    color: cs.onSurface.withValues(alpha: 0.5),
                   ),
                   const SizedBox(height: 16),
                   Text(
                     'ไม่มีคำขอเป็นเพื่อน',
                     style: TextStyle(
                       fontSize: 18,
-                      color: cs.onBackground.withOpacity(0.7),
+                      color: cs.onSurface.withValues(alpha: 0.7),
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -91,7 +91,7 @@ class _FriendRequestsScreenState extends State<FriendRequestsScreen> {
                     'คำขอเป็นเพื่อนที่ได้รับจะปรากฏที่นี่',
                     style: TextStyle(
                       fontSize: 14,
-                      color: cs.onBackground.withOpacity(0.5),
+                      color: cs.onSurface.withValues(alpha: 0.5),
                     ),
                     textAlign: TextAlign.center,
                   ),
@@ -241,14 +241,14 @@ class _FriendRequestTileState extends State<_FriendRequestTile> {
                         'ID: ${widget.request.fromUserId}',
                         style: TextStyle(
                           fontSize: 12,
-                          color: cs.onSurface.withOpacity(0.6),
+                          color: cs.onSurface.withValues(alpha: 0.6),
                         ),
                       ),
                       Text(
                         _formatTime(widget.request.sentAt),
                         style: TextStyle(
                           fontSize: 12,
-                          color: cs.onSurface.withOpacity(0.5),
+                          color: cs.onSurface.withValues(alpha: 0.5),
                         ),
                       ),
                     ],
@@ -263,7 +263,7 @@ class _FriendRequestTileState extends State<_FriendRequestTile> {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: cs.surfaceVariant.withOpacity(0.5),
+                  color: cs.surfaceContainerHighest.withValues(alpha: 0.5),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Column(
@@ -274,7 +274,7 @@ class _FriendRequestTileState extends State<_FriendRequestTile> {
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.bold,
-                        color: cs.onSurface.withOpacity(0.7),
+                        color: cs.onSurface.withValues(alpha: 0.7),
                       ),
                     ),
                     const SizedBox(height: 4),

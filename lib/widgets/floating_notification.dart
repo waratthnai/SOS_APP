@@ -171,7 +171,7 @@ class _FloatingNotificationOverlayState extends State<FloatingNotificationOverla
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: iconColor.withOpacity(0.2),
+                  color: iconColor.withValues(alpha: 0.2),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Icon(
@@ -205,7 +205,7 @@ class _FloatingNotificationOverlayState extends State<FloatingNotificationOverla
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: notification.type == NotificationType.info
                             ? cs.onSurfaceVariant
-                            : Colors.white.withOpacity(0.9),
+                            : Colors.white.withValues(alpha: 0.9),
                       ),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,

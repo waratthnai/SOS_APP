@@ -53,7 +53,7 @@ class _FriendsScreenState extends State<FriendsScreen> with SingleTickerProvider
     final cs = Theme.of(context).colorScheme;
     
     return Scaffold(
-      backgroundColor: cs.background,
+      backgroundColor: cs.surface,
       appBar: AppBar(
         title: const Text('เพื่อน', style: TextStyle(fontWeight: FontWeight.bold)),
         backgroundColor: cs.surface,
@@ -173,14 +173,14 @@ class _AllFriendsTab extends StatelessWidget {
                 Icon(
                   Icons.people_outline,
                   size: 80,
-                  color: Theme.of(context).colorScheme.onBackground.withOpacity(0.5),
+                  color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
                 ),
                 const SizedBox(height: 16),
                 Text(
                   'ยังไม่มีเพื่อน',
                   style: TextStyle(
                     fontSize: 18,
-                    color: Theme.of(context).colorScheme.onBackground.withOpacity(0.7),
+                    color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7),
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -188,7 +188,7 @@ class _AllFriendsTab extends StatelessWidget {
                   'เริ่มต้นการค้นหาและเพิ่มเพื่อนกันเถอะ!',
                   style: TextStyle(
                     fontSize: 14,
-                    color: Theme.of(context).colorScheme.onBackground.withOpacity(0.5),
+                    color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
                   ),
                   textAlign: TextAlign.center,
                 ),
@@ -239,14 +239,14 @@ class _OnlineFriendsTab extends StatelessWidget {
                 Icon(
                   Icons.wifi_off,
                   size: 80,
-                  color: Theme.of(context).colorScheme.onBackground.withOpacity(0.5),
+                  color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
                 ),
                 const SizedBox(height: 16),
                 Text(
                   'ไม่มีเพื่อนออนไลน์',
                   style: TextStyle(
                     fontSize: 18,
-                    color: Theme.of(context).colorScheme.onBackground.withOpacity(0.7),
+                    color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7),
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -254,7 +254,7 @@ class _OnlineFriendsTab extends StatelessWidget {
                   'เพื่อนของคุณจะปรากฏที่นี่เมื่อพวกเขาออนไลน์',
                   style: TextStyle(
                     fontSize: 14,
-                    color: Theme.of(context).colorScheme.onBackground.withOpacity(0.5),
+                    color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
                   ),
                   textAlign: TextAlign.center,
                 ),
@@ -298,9 +298,9 @@ class _FriendTile extends StatelessWidget {
             CircleAvatar(
               radius: 25,
               backgroundColor: isSOSActive
-                  ? Colors.red.withOpacity(0.2)
+                  ? Colors.red.withValues(alpha: 0.2)
                   : isRescueActive
-                      ? Colors.blue.withOpacity(0.2)
+                      ? Colors.blue.withValues(alpha: 0.2)
                       : cs.primaryContainer,
               backgroundImage: friend.avatar != null 
                 ? NetworkImage(friend.avatar!) 
@@ -435,7 +435,7 @@ class _FriendTile extends StatelessWidget {
               Text(
                 friend.lastMessage!,
                 style: TextStyle(
-                  color: cs.onSurface.withOpacity(0.8),
+                  color: cs.onSurface.withValues(alpha: 0.8),
                 ),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -445,7 +445,7 @@ class _FriendTile extends StatelessWidget {
                   _formatTime(friend.lastMessageTime!),
                   style: TextStyle(
                     fontSize: 12,
-                    color: cs.onSurface.withOpacity(0.5),
+                    color: cs.onSurface.withValues(alpha: 0.5),
                   ),
                 ),
             ] else ...[
@@ -454,7 +454,7 @@ class _FriendTile extends StatelessWidget {
                 friend.isOnline ? 'ออนไลน์' : 'ออฟไลน์',
                 style: TextStyle(
                   fontSize: 12,
-                  color: friend.isOnline ? Colors.green : cs.onSurface.withOpacity(0.5),
+                  color: friend.isOnline ? Colors.green : cs.onSurface.withValues(alpha: 0.5),
                   fontWeight: friend.isOnline ? FontWeight.w500 : FontWeight.normal,
                 ),
               ),

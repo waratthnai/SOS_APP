@@ -1,5 +1,6 @@
 ﻿// lib/cloud/firebase_service.dart
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -7,6 +8,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart' as fa;
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import '../core/friend_models.dart';
 import 'package:offgrid_sos/core/logger.dart';
 
@@ -242,7 +244,7 @@ class FirebaseService extends ChangeNotifier {
       final query = await _db!
           .collection('users')
           .where('name', isGreaterThanOrEqualTo: name)
-          .where('name', isLessThan: name + '\uf8ff')
+          .where('name', isLessThan: '$name\uf8ff')
           .limit(10)
           .get();
       
@@ -503,6 +505,26 @@ class FirebaseService extends ChangeNotifier {
     } catch (e) {
       Log.d('[Firebase] Error removing friend: $e');
       return false;
+    }
+  }
+
+  // ========== Firebase Storage ==========
+
+  /// อัพโหลดไฟล์ขึ้น Firebase Storage แล้วคืน download URL
+  /// [storagePath] เช่น 'chat_media/userA_userB/img_1234.jpg'
+  Future<String?> uploadFile(String localPath, String storagePath) async {
+    if (!_initialized || _user == null) return null;
+    try {
+      Log.d('[Storage] 📤 กำลังอัพโหลด: $storagePath');
+      final ref = FirebaseStorage.instance.ref(storagePath);
+      final task = ref.putFile(File(localPath));
+      final snapshot = await task;
+      final url = await snapshot.ref.getDownloadURL();
+      Log.d('[Storage] ✅ อัพโหลดสำเร็จ: $url');
+      return url;
+    } catch (e) {
+      Log.d('[Storage] ❌ อัพโหลดล้มเหลว: $e');
+      return null;
     }
   }
 

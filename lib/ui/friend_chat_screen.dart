@@ -13,6 +13,14 @@ import '../cloud/firebase_service.dart';
 import '../widgets/message_status_icon.dart';
 import 'package:offgrid_sos/core/logger.dart';
 
+void _openFriendFullScreenImage(BuildContext ctx, {required String heroTag, String? filePath, String? url}) {
+  Navigator.of(ctx).push(PageRouteBuilder(
+    opaque: false,
+    barrierColor: Colors.black,
+    pageBuilder: (_, __, ___) => _FullScreenImageViewer(heroTag: heroTag, filePath: filePath, url: url),
+  ));
+}
+
 class FriendChatScreen extends StatefulWidget {
   final Friend friend;
 
@@ -184,42 +192,37 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
   // 📎 แสดงเมนูแนบไฟล์
   void _showAttachmentMenu() {
     final cs = Theme.of(context).colorScheme;
-    
     showModalBottomSheet(
       context: context,
       backgroundColor: cs.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (context) => SafeArea(
+      builder: (ctx) => SafeArea(
         child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 16),
+          padding: const EdgeInsets.symmetric(vertical: 8),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               ListTile(
-                leading: Icon(Icons.image, color: cs.primary),
-                title: const Text('ส่งรูปภาพ'),
-                onTap: () {
-                  Navigator.pop(context);
-                  _pickImage();
-                },
+                leading: Icon(Icons.photo_camera, color: cs.primary),
+                title: const Text('ถ่ายรูป'),
+                onTap: () { Navigator.pop(ctx); _takePhoto(); },
+              ),
+              ListTile(
+                leading: Icon(Icons.photo_library, color: cs.primary),
+                title: const Text('รูปจากคลัง'),
+                onTap: () { Navigator.pop(ctx); _pickImage(); },
               ),
               ListTile(
                 leading: Icon(Icons.video_library, color: cs.primary),
-                title: const Text('ส่งวิดีโอ'),
-                onTap: () {
-                  Navigator.pop(context);
-                  _pickVideo();
-                },
+                title: const Text('วิดีโอจากคลัง'),
+                onTap: () { Navigator.pop(ctx); _pickVideo(); },
               ),
               ListTile(
                 leading: Icon(Icons.location_on, color: cs.primary),
                 title: const Text('แชร์ตำแหน่ง'),
-                onTap: () {
-                  Navigator.pop(context);
-                  _pickLocation();
-                },
+                onTap: () { Navigator.pop(ctx); _pickLocation(); },
               ),
             ],
           ),
@@ -228,7 +231,26 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
     );
   }
 
-  // �📷 เลือกรูปภาพจาก Gallery
+  // 📸 ถ่ายรูปจากกล้อง
+  Future<void> _takePhoto() async {
+    try {
+      final XFile? image = await _picker.pickImage(
+        source: ImageSource.camera,
+        maxWidth: 1920,
+        maxHeight: 1080,
+        imageQuality: 85,
+      );
+      if (image != null) await _sendImage(File(image.path));
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('❌ ไม่สามารถถ่ายรูปได้: $e')),
+        );
+      }
+    }
+  }
+
+  // 📷 เลือกรูปภาพจาก Gallery
   Future<void> _pickImage() async {
     try {
       final XFile? image = await _picker.pickImage(
@@ -368,7 +390,7 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
     final cs = Theme.of(context).colorScheme;
     
     return Scaffold(
-      backgroundColor: cs.background,
+      backgroundColor: cs.surface,
       appBar: AppBar(
         backgroundColor: cs.surface,
         title: Row(
@@ -543,14 +565,14 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
                 Icon(
                   Icons.chat_bubble_outline,
                   size: 64,
-                  color: Theme.of(context).colorScheme.onBackground.withOpacity(0.5),
+                  color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
                 ),
                 const SizedBox(height: 16),
                 Text(
                   'เริ่มต้นการสนทนา',
                   style: TextStyle(
                     fontSize: 18,
-                    color: Theme.of(context).colorScheme.onBackground.withOpacity(0.7),
+                    color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7),
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -558,7 +580,7 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
                   'ส่งข้อความให้ ${widget.friend.name} เพื่อเริ่มแชท',
                   style: TextStyle(
                     fontSize: 14,
-                    color: Theme.of(context).colorScheme.onBackground.withOpacity(0.5),
+                    color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
                   ),
                   textAlign: TextAlign.center,
                 ),
@@ -576,14 +598,14 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
                 Icon(
                   Icons.search_off,
                   size: 64,
-                  color: Theme.of(context).colorScheme.onBackground.withOpacity(0.5),
+                  color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
                 ),
                 const SizedBox(height: 16),
                 Text(
                   'ไม่พบข้อความที่ค้นหา',
                   style: TextStyle(
                     fontSize: 18,
-                    color: Theme.of(context).colorScheme.onBackground.withOpacity(0.7),
+                    color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7),
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -591,7 +613,7 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
                   'ลองค้นหาด้วยคำอื่น',
                   style: TextStyle(
                     fontSize: 14,
-                    color: Theme.of(context).colorScheme.onBackground.withOpacity(0.5),
+                    color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
                   ),
                 ),
               ],
@@ -635,18 +657,18 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
       decoration: BoxDecoration(
         color: cs.surface,
         border: Border(
-          bottom: BorderSide(color: cs.outline.withOpacity(0.2)),
+          bottom: BorderSide(color: cs.outline.withValues(alpha: 0.2)),
         ),
       ),
       child: TextField(
         controller: _searchController,
         decoration: InputDecoration(
           hintText: 'ค้นหาข้อความ...',
-          hintStyle: TextStyle(color: cs.onSurface.withOpacity(0.5)),
-          prefixIcon: Icon(Icons.search, color: cs.onSurface.withOpacity(0.5)),
+          hintStyle: TextStyle(color: cs.onSurface.withValues(alpha: 0.5)),
+          prefixIcon: Icon(Icons.search, color: cs.onSurface.withValues(alpha: 0.5)),
           suffixIcon: _searchQuery.isNotEmpty
               ? IconButton(
-                  icon: Icon(Icons.clear, color: cs.onSurface.withOpacity(0.5)),
+                  icon: Icon(Icons.clear, color: cs.onSurface.withValues(alpha: 0.5)),
                   onPressed: () {
                     setState(() {
                       _searchController.clear();
@@ -656,7 +678,7 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
                 )
               : null,
           filled: true,
-          fillColor: cs.background,
+          fillColor: cs.surface,
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(25),
             borderSide: BorderSide.none,
@@ -683,7 +705,7 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
       decoration: BoxDecoration(
         color: cs.surface,
         border: Border(
-          top: BorderSide(color: cs.outline.withOpacity(0.2)),
+          top: BorderSide(color: cs.outline.withValues(alpha: 0.2)),
         ),
       ),
       child: SafeArea(
@@ -718,7 +740,7 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
                     borderSide: BorderSide.none,
                   ),
                   filled: true,
-                  fillColor: cs.background,
+                  fillColor: cs.surface,
                   contentPadding: const EdgeInsets.symmetric(
                     horizontal: 16,
                     vertical: 12,
@@ -833,6 +855,62 @@ class _MessageBubble extends StatelessWidget {
     this.onOpenUrl,
   });
 
+  Widget _buildImageWidget(FriendChatMessage message) {
+    final heroTag = 'friend_img_${message.id}';
+    Widget imageChild;
+
+    // URL จาก Firebase Storage — ใช้ก่อนเสมอ
+    if (message.fileUrl != null) {
+      imageChild = Image.network(
+        message.fileUrl!,
+        width: 200,
+        fit: BoxFit.cover,
+        loadingBuilder: (context, child, progress) {
+          if (progress == null) return child;
+          return Container(
+            width: 200,
+            height: 150,
+            color: Colors.black12,
+            child: const Center(child: CircularProgressIndicator()),
+          );
+        },
+        errorBuilder: (context, error, stackTrace) => _imageErrorWidget(),
+      );
+    } else if (message.filePath != null) {
+      imageChild = Image.file(
+        File(message.filePath!),
+        width: 200,
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) => _imageErrorWidget(),
+      );
+    } else {
+      return _imageErrorWidget();
+    }
+
+    return Builder(
+      builder: (ctx) => GestureDetector(
+        onTap: () => _openFriendFullScreenImage(ctx, heroTag: heroTag, filePath: message.filePath, url: message.fileUrl),
+        child: Hero(tag: heroTag, child: imageChild),
+      ),
+    );
+  }
+
+  Widget _imageErrorWidget() {
+    return Container(
+      width: 200,
+      padding: const EdgeInsets.all(16),
+      color: Colors.red.withValues(alpha: 0.1),
+      child: const Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.error_outline, color: Colors.red),
+          SizedBox(height: 8),
+          Text('ไม่สามารถโหลดรูปภาพได้', style: TextStyle(fontSize: 12)),
+        ],
+      ),
+    );
+  }
+
   // สร้าง Widget สำหรับแสดงข้อความตำแหน่ง
   Widget _buildLocationMessage(String text, bool isFromMe, ColorScheme cs) {
     // แยกข้อความและ URL
@@ -853,13 +931,13 @@ class _MessageBubble extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
           color: isFromMe 
-            ? cs.primaryContainer.withOpacity(0.3)
-            : cs.surfaceVariant.withOpacity(0.5),
+            ? cs.primaryContainer.withValues(alpha: 0.3)
+            : cs.surfaceContainerHighest.withValues(alpha: 0.5),
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
             color: isFromMe 
-              ? cs.onPrimaryContainer.withOpacity(0.3)
-              : cs.onSurfaceVariant.withOpacity(0.3),
+              ? cs.onPrimaryContainer.withValues(alpha: 0.3)
+              : cs.onSurfaceVariant.withValues(alpha: 0.3),
           ),
         ),
         child: Row(
@@ -922,7 +1000,7 @@ class _MessageBubble extends StatelessWidget {
               decoration: BoxDecoration(
                 color: isFromMe 
                   ? cs.primary 
-                  : cs.surfaceVariant,
+                  : cs.surfaceContainerHighest,
                 borderRadius: BorderRadius.only(
                   topLeft: const Radius.circular(16),
                   topRight: const Radius.circular(16),
@@ -934,40 +1012,21 @@ class _MessageBubble extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // 📷 แสดงรูปภาพ (ถ้ามี)
-                  if (message.hasImage && message.filePath != null) ...[
+                  if (message.hasImage) ...[
                     ClipRRect(
                       borderRadius: BorderRadius.circular(12),
-                      child: Image.file(
-                        File(message.filePath!),
-                        width: 200,
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) {
-                          return Container(
-                            padding: const EdgeInsets.all(16),
-                            color: Colors.red.withOpacity(0.1),
-                            child: Column(
-                              children: [
-                                const Icon(Icons.error_outline, color: Colors.red),
-                                const SizedBox(height: 8),
-                                const Text(
-                                  'ไม่สามารถโหลดรูปภาพได้',
-                                  style: TextStyle(fontSize: 12),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
-                      ),
+                      child: _buildImageWidget(message),
                     ),
                     if (message.text != null && message.text!.isNotEmpty)
                       const SizedBox(height: 8),
                   ],
                   // 🎥 แสดงวิดีโอ (ถ้ามี)
-                  if (message.hasVideo && message.filePath != null) ...[
+                  if (message.hasVideo) ...[
                     ClipRRect(
                       borderRadius: BorderRadius.circular(12),
                       child: _VideoPlayerWidget(
-                        videoPath: message.filePath!,
+                        videoPath: message.filePath,
+                        videoUrl: message.fileUrl,
                       ),
                     ),
                     if (message.text != null && message.text!.isNotEmpty)
@@ -996,8 +1055,8 @@ class _MessageBubble extends StatelessWidget {
                         style: TextStyle(
                           fontSize: 12,
                           color: isFromMe 
-                            ? cs.onPrimary.withOpacity(0.7)
-                            : cs.onSurfaceVariant.withOpacity(0.7),
+                            ? cs.onPrimary.withValues(alpha: 0.7)
+                            : cs.onSurfaceVariant.withValues(alpha: 0.7),
                         ),
                       ),
                       if (isFromMe) ...[
@@ -1039,9 +1098,10 @@ class _MessageBubble extends StatelessWidget {
 }
 
 class _VideoPlayerWidget extends StatefulWidget {
-  final String videoPath;
+  final String? videoPath;
+  final String? videoUrl;
 
-  const _VideoPlayerWidget({required this.videoPath});
+  const _VideoPlayerWidget({this.videoPath, this.videoUrl});
 
   @override
   State<_VideoPlayerWidget> createState() => _VideoPlayerWidgetState();
@@ -1060,7 +1120,15 @@ class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
 
   Future<void> _initializeVideo() async {
     try {
-      _controller = VideoPlayerController.file(File(widget.videoPath));
+      // ใช้ Network URL ถ้ามี ไม่งั้น fallback ไป local file
+      if (widget.videoUrl != null) {
+        _controller = VideoPlayerController.networkUrl(Uri.parse(widget.videoUrl!));
+      } else if (widget.videoPath != null) {
+        _controller = VideoPlayerController.file(File(widget.videoPath!));
+      } else {
+        setState(() => _hasError = true);
+        return;
+      }
       await _controller.initialize();
       if (mounted) {
         setState(() {
@@ -1090,7 +1158,7 @@ class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
         width: 200,
         height: 150,
         decoration: BoxDecoration(
-          color: Colors.red.withOpacity(0.1),
+          color: Colors.red.withValues(alpha: 0.1),
           borderRadius: BorderRadius.circular(12),
         ),
         child: const Column(
@@ -1155,16 +1223,45 @@ class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
             if (!_controller.value.isPlaying)
               Container(
                 decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.3),
+                  color: Colors.black.withValues(alpha: 0.3),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Icon(
                   Icons.play_circle_outline,
                   size: 48,
-                  color: Colors.white.withOpacity(0.9),
+                  color: Colors.white.withValues(alpha: 0.9),
                 ),
               ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FullScreenImageViewer extends StatelessWidget {
+  final String heroTag;
+  final String? filePath;
+  final String? url;
+
+  const _FullScreenImageViewer({required this.heroTag, this.filePath, this.url});
+
+  @override
+  Widget build(BuildContext context) {
+    final imageWidget = url != null
+        ? Image.network(url!, fit: BoxFit.contain)
+        : Image.file(File(filePath!), fit: BoxFit.contain);
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: GestureDetector(
+        onTap: () => Navigator.of(context).pop(),
+        child: SizedBox.expand(
+          child: InteractiveViewer(
+            minScale: 0.5,
+            maxScale: 5.0,
+            child: Center(child: Hero(tag: heroTag, child: imageWidget)),
+          ),
         ),
       ),
     );

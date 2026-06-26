@@ -1,15 +1,16 @@
-﻿import 'dart:async';
-import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // เพิ่ม import สำหรับ Clipboard
-import 'package:geolocator/geolocator.dart'; // เพิ่ม import สำหรับ GPS
+﻿import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:firebase_messaging/firebase_messaging.dart'; // เพิ่มสำหรับ FCM
 import 'package:offgrid_sos/core/transport.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'core/app_state.dart';
+import 'core/nearby_transport.dart';
 import 'core/app_theme.dart'; // Import ธีมใหม่
 import 'cloud/firebase_service.dart';
 import 'core/fcm_service.dart'; // เพิ่ม FCM Service
 import 'ui/notification_panel.dart';
 import 'core/notification_service.dart';
+import 'ui/sos_orb.dart';
 import 'ui/friends_screen.dart';
 import 'ui/profile_screen.dart';
 import 'ui/emergency_chat_screen.dart';
@@ -106,12 +107,8 @@ class _OffGridAppState extends State<OffGridApp> {
   }
 
   Future<void> setThemeMode(ThemeMode mode) async {
-    // เพิ่ม haptic feedback เมื่อเปลี่ยนธีม
-    HapticFeedback.mediumImpact();
-
-    setState(() {
-      _themeMode = mode;
-    });
+    HapticFeedback.lightImpact();
+    setState(() => _themeMode = mode);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('theme_mode', _themeModeToString(mode));
   }
@@ -120,15 +117,13 @@ class _OffGridAppState extends State<OffGridApp> {
   Widget build(BuildContext context) {
     return FloatingNotificationOverlay(
       child: MaterialApp(
-        navigatorKey: navigatorKey, // เพิ่ม global navigator key
+        navigatorKey: navigatorKey,
         title: 'Off-Grid SOS',
         debugShowCheckedModeBanner: false,
         theme: AppTheme.lightTheme,
         darkTheme: AppTheme.darkTheme,
         themeMode: _themeMode,
-        // เพิ่ม smooth theme transition
-        themeAnimationDuration: const Duration(milliseconds: 500),
-        themeAnimationCurve: Curves.easeInOutCubic,
+        themeAnimationDuration: Duration.zero,
         routes: {'/home': (context) => const RootNav()},
         home: widget.hasDeviceName
             ? AnimatedBuilder(
@@ -183,6 +178,7 @@ class _RootNavState extends State<RootNav> {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Scaffold(
       body: GestureDetector(
         onHorizontalDragUpdate: _onHorizontalDrag,
@@ -190,11 +186,11 @@ class _RootNavState extends State<RootNav> {
       ),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
-          color: Colors.white,
-          border: Border(top: BorderSide(color: Colors.grey.shade200, width: 0.5)),
+          color: cs.surface,
+          border: Border(top: BorderSide(color: cs.outlineVariant, width: 0.5)),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.06),
+              color: Colors.black.withValues(alpha: 0.06),
               blurRadius: 12,
               offset: const Offset(0, -2),
             ),
@@ -220,14 +216,14 @@ class _RootNavState extends State<RootNav> {
                       children: [
                         Icon(
                           item.icon,
-                          color: selected ? const Color(0xFFD32F2F) : const Color(0xFF8E8E93),
+                          color: selected ? cs.primary : cs.onSurfaceVariant,
                           size: 24,
                         ),
                         const SizedBox(height: 2),
                         Text(
                           item.label,
                           style: TextStyle(
-                            color: selected ? const Color(0xFFD32F2F) : const Color(0xFF8E8E93),
+                            color: selected ? cs.primary : cs.onSurfaceVariant,
                             fontSize: 10,
                             fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
                           ),
@@ -261,13 +257,6 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
   late AnimationController _blinkController;
 
-  // Hold-to-emergency state
-  Timer? _holdTimer;
-  double _holdProgress = 0.0;
-  bool _isHolding = false;
-  bool _isEmergencyActive = false;
-  ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? _warningSnackBar;
-
   @override
   void initState() {
     super.initState();
@@ -275,304 +264,58 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       duration: const Duration(milliseconds: 600),
       vsync: this,
     )..repeat(reverse: true);
-    // TODO: remove mock — for UI preview only
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      appState.DEBUG_addMockPeer();
-    });
   }
 
   @override
   void dispose() {
-    _holdTimer?.cancel();
     _blinkController.dispose();
     super.dispose();
   }
 
-  // Unified SOS handler: tap = normal help, hold 5s = emergency
-  Future<void> _handleSOSTap(BuildContext context, {bool emergency = false}) async {
-    final wasActive = appState.isSOSActive;
-
-    // กด normal tap ขณะ SOS active → ปิด SOS
-    // กด emergency hold ขณะ SOS active → อัพเกรดเป็น emergency (ไม่ปิด)
-    if (wasActive && !emergency) {
-      HapticFeedback.mediumImpact();
-      await appState.toggleSOSMode();
-      setState(() { _isEmergencyActive = false; });
-      if (appState.peers.isNotEmpty) {
-        appState.broadcastSOSStatus(isActive: false);
-      }
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('ปิดการขอความช่วยเหลือ'), duration: Duration(seconds: 2)),
-        );
-      }
-      return;
-    }
-
-    // emergency hold ขณะ SOS active → อัพเกรดเป็น emergency โดยไม่ toggle
-    if (!wasActive) {
-      await appState.toggleSOSMode();
-    }
-
-    if (emergency) {
-      HapticFeedback.heavyImpact();
-      setState(() { _isEmergencyActive = true; });
-    } else {
-      HapticFeedback.mediumImpact();
-      setState(() { _isEmergencyActive = false; });
-    }
-
-    String? latitude;
-    String? longitude;
-    try {
-      final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-        timeLimit: const Duration(seconds: 5),
-      );
-      latitude = position.latitude.toStringAsFixed(6);
-      longitude = position.longitude.toStringAsFixed(6);
-    } catch (e) {
-      Log.d('⚠️ Cannot get GPS location: $e');
-    }
-
-    if (appState.peers.isNotEmpty) {
-      final now = DateTime.now();
-      final timeStr = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}';
-      final String message;
-      if (emergency) {
-        message = '🚨 SOS ฉุกเฉิน! ต้องการความช่วยเหลือด่วน!\n⏰ เวลา: $timeStr'
-            + (latitude != null && longitude != null ? '\n📍 ตำแหน่ง: https://www.google.com/maps?q=$latitude,$longitude' : '');
-      } else {
-        message = '🆘 ขอความช่วยเหลือ\n⏰ เวลา: $timeStr'
-            + (latitude != null && longitude != null ? '\n📍 ตำแหน่ง: https://www.google.com/maps?q=$latitude,$longitude' : '');
-      }
-      appState.send(message);
-      appState.broadcastSOSStatus(
-        isActive: true,
-        isEmergency: emergency,
-        latitude: latitude != null ? double.parse(latitude) : null,
-        longitude: longitude != null ? double.parse(longitude) : null,
-      );
-    }
-
-    if (context.mounted && !emergency) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('ส่งคำขอความช่วยเหลือแล้ว'), duration: Duration(seconds: 2)),
-      );
-    }
+  String? _distanceLabel(String peerId) {
+    final d = appState.getDistanceToPeerSync(peerId, null);
+    if (d == null) return null;
+    return d < 1000 ? '~${d.toStringAsFixed(0)} m' : '~${(d / 1000).toStringAsFixed(1)} km';
   }
 
-  void _startHold(BuildContext context) {
-    if (_isHolding) return;
-    _isHolding = true;
-    _holdProgress = 0.0;
-
-    _warningSnackBar = ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: const Row(
-          children: [
-            Icon(Icons.gavel, color: Colors.white, size: 18),
-            SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                'หากกดขอความช่วยเหลือโดยไม่ได้มีเหตุจำเป็น มีโทษทางกฎหมาย',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+  Widget _gpsStatusRow(ColorScheme cs) {
+    final hasOwnGps = appState.myCurrentPosition != null;
+    final peerGpsCount = appState.peerLocations.length;
+    final peers = appState.peers;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        children: [
+          Icon(Icons.gps_fixed, size: 12,
+              color: hasOwnGps ? Colors.green : cs.onSurfaceVariant.withValues(alpha: 0.4)),
+          const SizedBox(width: 4),
+          Text(
+            hasOwnGps ? 'GPS ✓' : 'GPS —',
+            style: TextStyle(
+              fontSize: 11,
+              color: hasOwnGps ? Colors.green : cs.onSurfaceVariant.withValues(alpha: 0.4),
+            ),
+          ),
+          if (!hasOwnGps) ...[
+            const SizedBox(width: 2),
+            GestureDetector(
+              onTap: () => appState.retryLocationBroadcast(),
+              child: Icon(Icons.refresh, size: 12, color: cs.onSurfaceVariant.withValues(alpha: 0.5)),
+            ),
+          ],
+          if (peers.isNotEmpty) ...[
+            const SizedBox(width: 6),
+            Text(
+              '· peer GPS $peerGpsCount/${peers.length}',
+              style: TextStyle(
+                fontSize: 11,
+                color: peerGpsCount == peers.length
+                    ? Colors.green.withValues(alpha: 0.8)
+                    : cs.onSurfaceVariant.withValues(alpha: 0.4),
               ),
             ),
           ],
-        ),
-        backgroundColor: const Color(0xFFE65100),
-        duration: const Duration(seconds: 10),
-        behavior: SnackBarBehavior.floating,
-        margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      ),
-    );
-
-    const totalMs = 5000;
-    const intervalMs = 80;
-    _holdTimer = Timer.periodic(const Duration(milliseconds: intervalMs), (timer) {
-      if (!_isHolding || !mounted) {
-        timer.cancel();
-        if (mounted) setState(() { _holdProgress = 0.0; });
-        return;
-      }
-      setState(() { _holdProgress = (_holdProgress + intervalMs / totalMs).clamp(0.0, 1.0); });
-      if (_holdProgress >= 1.0) {
-        timer.cancel();
-        _isHolding = false;
-        setState(() { _holdProgress = 0.0; });
-        _warningSnackBar?.close();
-        _warningSnackBar = null;
-        _handleSOSTap(context, emergency: true);
-      }
-    });
-  }
-
-  void _cancelHold() {
-    if (!_isHolding) return;
-    _isHolding = false;
-    _holdTimer?.cancel();
-    _warningSnackBar?.close();
-    _warningSnackBar = null;
-    if (mounted) setState(() { _holdProgress = 0.0; });
-  }
-
-  Widget _buildStatusBadge(bool isSOSActive) {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 400),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: isSOSActive ? const Color(0xFFFFEBEE) : const Color(0xFFE8F5E9),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          AnimatedBuilder(
-            animation: _blinkController,
-            builder: (context, _) => Container(
-              width: 8,
-              height: 8,
-              decoration: BoxDecoration(
-                color: isSOSActive
-                    ? Color.lerp(Colors.red, Colors.redAccent, _blinkController.value)!
-                    : const Color(0xFF4CAF50),
-                shape: BoxShape.circle,
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            isSOSActive ? 'SOS Active' : "You're Safe",
-            style: TextStyle(
-              color: isSOSActive ? Colors.red.shade700 : const Color(0xFF2E7D32),
-              fontWeight: FontWeight.w600,
-              fontSize: 14,
-            ),
-          ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildSOSCircleButton(BuildContext context, bool isSOSActive) {
-    return GestureDetector(
-      onTap: () {
-        if (_isHolding) return;
-        _handleSOSTap(context, emergency: false);
-      },
-      onLongPressStart: (_) {
-        if (_isEmergencyActive) return; // ถ้าเป็น emergency อยู่แล้ว ไม่ต้อง hold ซ้ำ
-        _startHold(context);
-      },
-      onLongPressEnd: (_) => _cancelHold(),
-      onLongPressCancel: () => _cancelHold(),
-      child: AnimatedBuilder(
-        animation: _blinkController,
-        builder: (context, _) {
-          final pulse = _blinkController.value;
-          final isEmergency = isSOSActive && _isEmergencyActive;
-          final buttonColor = isEmergency
-              ? Color.lerp(const Color(0xFFB71C1C), const Color(0xFFD32F2F), pulse)!
-              : const Color(0xFFD32F2F);
-          return SizedBox(
-            width: 260,
-            height: 260,
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                if (isSOSActive) ...[
-                  Container(
-                    width: 210 + (pulse * (isEmergency ? 50 : 40)),
-                    height: 210 + (pulse * (isEmergency ? 50 : 40)),
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.red.withOpacity((1 - pulse) * (isEmergency ? 0.14 : 0.08)),
-                    ),
-                  ),
-                  Container(
-                    width: 188 + (pulse * (isEmergency ? 30 : 24)),
-                    height: 188 + (pulse * (isEmergency ? 30 : 24)),
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.red.withOpacity((1 - pulse) * (isEmergency ? 0.18 : 0.12)),
-                    ),
-                  ),
-                ] else ...[
-                  Container(
-                    width: 200,
-                    height: 200,
-                    decoration: const BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Color(0x14D32F2F),
-                    ),
-                  ),
-                ],
-                // Hold progress ring
-                if (_holdProgress > 0)
-                  SizedBox(
-                    width: 186,
-                    height: 186,
-                    child: CircularProgressIndicator(
-                      value: _holdProgress,
-                      strokeWidth: 7,
-                      color: Colors.orangeAccent,
-                      backgroundColor: Colors.red.withOpacity(0.2),
-                    ),
-                  ),
-                Container(
-                  width: 170,
-                  height: 170,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: buttonColor,
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.red.withOpacity(isSOSActive ? (isEmergency ? 0.6 : 0.45) : 0.25),
-                        blurRadius: isSOSActive ? (isEmergency ? 50 : 40) : 20,
-                        spreadRadius: isSOSActive ? (isEmergency ? 12 : 8) : 2,
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        isEmergency ? Icons.crisis_alert : Icons.warning_amber_rounded,
-                        size: 54,
-                        color: Colors.white,
-                      ),
-                      const SizedBox(height: 4),
-                      const Text(
-                        'SOS',
-                        style: TextStyle(
-                          fontSize: 30,
-                          fontWeight: FontWeight.w900,
-                          color: Colors.white,
-                          letterSpacing: 2,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        _holdProgress > 0
-                            ? 'Emergency in ${((1.0 - _holdProgress) * 5).ceil()}s...'
-                            : isSOSActive
-                                ? (isEmergency ? 'EMERGENCY ACTIVE' : 'HELP ACTIVE')
-                                : 'Tap / Hold 5s',
-                        style: TextStyle(
-                          fontSize: _holdProgress > 0 ? 10 : 12,
-                          fontWeight: FontWeight.w400,
-                          color: Colors.white70,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          );
-        },
       ),
     );
   }
@@ -672,82 +415,27 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     );
   }
 
-  Widget _buildRescueOthersButton(BuildContext context, bool isRescueMode) {
-    return GestureDetector(
-      onTap: () {
-        HapticFeedback.mediumImpact();
-        appState.toggleRescueMode().then((_) {
-          if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(!isRescueMode ? 'เปิดโหมดหน่วยกู้ภัย' : 'ปิดโหมดหน่วยกู้ภัย'),
-                duration: const Duration(seconds: 2),
-              ),
-            );
-          }
-        });
-      },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 300),
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(vertical: 18),
-        decoration: BoxDecoration(
-          color: isRescueMode ? const Color(0x141565C0) : Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: const Color(0xFF1976D2), width: 2),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              isRescueMode ? Icons.shield : Icons.shield_outlined,
-              color: const Color(0xFF1976D2),
-              size: 22,
-            ),
-            const SizedBox(width: 10),
-            Text(
-              isRescueMode ? 'Rescue Mode: ON' : 'Rescue Others',
-              style: const TextStyle(
-                color: Color(0xFF1976D2),
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-
-
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return AnimatedBuilder(
       animation: appState,
       builder: (context, _) {
-        final isSOSActive = appState.isSOSActive;
-        final isRescueMode = appState.isRescueMode;
         final peers = appState.peers;
 
         return Scaffold(
-          backgroundColor: const Color(0xFFF2F2F7),
           appBar: AppBar(
-            title: const Text(
-              'SOS Rescue',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.black),
-            ),
+            title: const Text('SOS Rescue'),
             leading: IconButton(
-              icon: const Icon(Icons.settings_input_antenna, color: Colors.black87),
+              icon: const Icon(Icons.settings_input_antenna),
               tooltip: 'เลือกโปรโตคอลการเชื่อมต่อ',
               onPressed: () => _showProtocolPicker(context),
             ),
-            backgroundColor: Colors.white,
             elevation: 0,
             centerTitle: true,
             bottom: PreferredSize(
               preferredSize: const Size.fromHeight(0.5),
-              child: Container(height: 0.5, color: const Color(0xFFE0E0E0)),
+              child: Container(height: 0.5, color: cs.outlineVariant),
             ),
             actions: [
               AnimatedBuilder(
@@ -757,7 +445,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   return Stack(
                     children: [
                       IconButton(
-                        icon: const Icon(Icons.notifications_outlined, color: Colors.black87),
+                        icon: const Icon(Icons.notifications_outlined),
                         onPressed: () {
                           Navigator.of(context).push(
                             MaterialPageRoute(builder: (context) => const NotificationsScreen()),
@@ -771,14 +459,14 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                           child: Container(
                             padding: const EdgeInsets.all(4),
                             decoration: BoxDecoration(
-                              color: Colors.red,
+                              color: cs.error,
                               shape: BoxShape.circle,
-                              border: Border.all(color: Colors.white, width: 1.5),
+                              border: Border.all(color: cs.surface, width: 1.5),
                             ),
                             constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
                             child: Text(
                               notificationCount > 9 ? '9+' : '$notificationCount',
-                              style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                              style: TextStyle(color: cs.onError, fontSize: 10, fontWeight: FontWeight.bold),
                               textAlign: TextAlign.center,
                             ),
                           ),
@@ -789,49 +477,54 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               ),
             ],
           ),
-          body: SingleChildScrollView(
+          body: RefreshIndicator(
+            onRefresh: () async {
+              await appState.startScan();
+              appState.retryLocationBroadcast();
+            },
+            child: SingleChildScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Column(
                 children: [
-                  const SizedBox(height: 32),
-                  _buildStatusBadge(isSOSActive),
-                  const SizedBox(height: 40),
-                  _buildSOSCircleButton(context, isSOSActive),
-                  const SizedBox(height: 32),
-                  _buildRescueOthersButton(context, isRescueMode),
+                  const SizedBox(height: 16),
+                  const SosOrb(),
                   const SizedBox(height: 16),
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: Colors.white,
+                      color: cs.surface,
                       borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: cs.outlineVariant),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Row(
                           children: [
-                            const Icon(Icons.devices, color: Colors.blue, size: 20),
+                            Icon(Icons.devices, color: cs.secondary, size: 20),
                             const SizedBox(width: 8),
-                            const Text(
+                            Text(
                               'Nearby Devices',
-                              style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.black87),
+                              style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: cs.onSurface),
                             ),
                             const Spacer(),
                             if (peers.isNotEmpty)
-                              Text('${peers.length} device${peers.length > 1 ? 's' : ''}', style: const TextStyle(fontSize: 13, color: Colors.grey)),
+                              Text('${peers.length} device${peers.length > 1 ? 's' : ''}',
+                                  style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant)),
                           ],
                         ),
-                        const SizedBox(height: 12),
+                        const SizedBox(height: 8),
+                        _gpsStatusRow(cs),
                         if (peers.isEmpty)
-                          const Center(
+                          Center(
                             child: Padding(
-                              padding: EdgeInsets.symmetric(vertical: 16),
+                              padding: const EdgeInsets.symmetric(vertical: 16),
                               child: Text(
                                 'No nearby devices found',
-                                style: TextStyle(fontSize: 13, color: Colors.black26, fontStyle: FontStyle.italic),
+                                style: TextStyle(fontSize: 13, color: cs.onSurface.withValues(alpha: 0.35), fontStyle: FontStyle.italic),
                               ),
                             ),
                           )
@@ -841,7 +534,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                             final isEmergencySOS = appState.isEmergencySOSPeer(p.name);
                             final isSOS = isEmergencySOS || appState.isSOSModePeer(p.name) || appState.isSOSPeer(p.name);
                             if (isEmergencySOS) {
-                              // Emergency SOS — blinking red card
                               return AnimatedBuilder(
                                 animation: _blinkController,
                                 builder: (ctx, _) {
@@ -850,15 +542,15 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                     margin: const EdgeInsets.only(bottom: 8),
                                     padding: const EdgeInsets.all(10),
                                     decoration: BoxDecoration(
-                                      color: Colors.red.withOpacity(0.06 + blink * 0.18),
+                                      color: Colors.red.withValues(alpha: 0.06 + blink * 0.18),
                                       borderRadius: BorderRadius.circular(10),
                                       border: Border.all(
-                                        color: Colors.red.withOpacity(0.4 + blink * 0.6),
+                                        color: Colors.red.withValues(alpha: 0.4 + blink * 0.6),
                                         width: 1.5 + blink * 1.5,
                                       ),
                                       boxShadow: [
                                         BoxShadow(
-                                          color: Colors.red.withOpacity(blink * 0.3),
+                                          color: Colors.red.withValues(alpha: blink * 0.3),
                                           blurRadius: 8 + blink * 8,
                                           spreadRadius: blink * 2,
                                         ),
@@ -872,30 +564,39 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                           child: Column(
                                             crossAxisAlignment: CrossAxisAlignment.start,
                                             children: [
-                                              Text.rich(
-                                                TextSpan(
-                                                  children: [
-                                                    TextSpan(
-                                                      text: p.name.isNotEmpty ? p.name : 'Unknown Device',
-                                                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color.lerp(Colors.red.shade800, Colors.red.shade500, blink)!),
+                                              Row(
+                                                children: [
+                                                  Flexible(
+                                                    child: Text.rich(
+                                                      TextSpan(
+                                                        children: [
+                                                          TextSpan(
+                                                            text: p.name.isNotEmpty ? p.name : 'Unknown Device',
+                                                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color.lerp(Colors.red.shade800, Colors.red.shade500, blink)!),
+                                                          ),
+                                                          TextSpan(
+                                                            text: '  🚨 ฉุกเฉิน!',
+                                                            style: TextStyle(fontSize: 11, color: Colors.red.shade700, fontWeight: FontWeight.w600),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                      overflow: TextOverflow.ellipsis,
                                                     ),
-                                                    TextSpan(
-                                                      text: '  🚨 ฉุกเฉิน!',
-                                                      style: TextStyle(fontSize: 11, color: Colors.red.shade700, fontWeight: FontWeight.w600),
+                                                  ),
+                                                  const SizedBox(width: 5),
+                                                  Container(
+                                                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                                                    decoration: BoxDecoration(
+                                                      color: Colors.red.withValues(alpha: 0.12),
+                                                      borderRadius: BorderRadius.circular(4),
                                                     ),
-                                                  ],
-                                                ),
-                                                overflow: TextOverflow.ellipsis,
+                                                    child: Text(
+                                                      _distanceLabel(p.id) ?? '—',
+                                                      style: TextStyle(fontSize: 10, color: Colors.red.shade700, fontWeight: FontWeight.w600),
+                                                    ),
+                                                  ),
+                                                ],
                                               ),
-                                              if (p.distance != null) ...[
-                                                const SizedBox(height: 2),
-                                                Text(
-                                                  p.distance! < 1000
-                                                      ? '${p.distance!.toStringAsFixed(0)} m away'
-                                                      : '${(p.distance! / 1000).toStringAsFixed(1)} km away',
-                                                  style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
-                                                ),
-                                              ],
                                             ],
                                           ),
                                         ),
@@ -906,10 +607,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                           ),
                                           child: Container(
                                             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                            decoration: BoxDecoration(
-                                              color: Colors.red,
-                                              borderRadius: BorderRadius.circular(8),
-                                            ),
+                                            decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(8)),
                                             child: const Text('Chat', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600)),
                                           ),
                                         ),
@@ -924,16 +622,16 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                               padding: const EdgeInsets.all(10),
                               decoration: BoxDecoration(
                                 color: isSOS
-                                    ? Colors.red.withOpacity(0.08)
+                                    ? Colors.red.withValues(alpha: 0.08)
                                     : isRescue
-                                        ? Colors.blue.withOpacity(0.08)
-                                        : const Color(0xFFF5F5F5),
+                                        ? cs.secondary.withValues(alpha: 0.08)
+                                        : cs.surfaceContainerHighest,
                                 borderRadius: BorderRadius.circular(10),
                                 border: Border.all(
                                   color: isSOS
-                                      ? Colors.red.withOpacity(0.3)
+                                      ? Colors.red.withValues(alpha: 0.3)
                                       : isRescue
-                                          ? Colors.blue.withOpacity(0.3)
+                                          ? cs.secondary.withValues(alpha: 0.3)
                                           : Colors.transparent,
                                 ),
                               ),
@@ -941,27 +639,32 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                 children: [
                                   Icon(
                                     isSOS ? Icons.warning_amber_rounded : isRescue ? Icons.local_hospital : Icons.device_hub,
-                                    color: isSOS ? Colors.red : isRescue ? Colors.blue : Colors.grey,
+                                    color: isSOS ? cs.error : isRescue ? cs.secondary : cs.onSurfaceVariant,
                                     size: 16,
                                   ),
                                   const SizedBox(width: 8),
                                   Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                    child: Row(
                                       children: [
-                                        Text(
-                                          p.name.isNotEmpty ? p.name : 'Unknown Device',
-                                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Colors.black87),
-                                        ),
-                                        if (p.distance != null) ...[
-                                          const SizedBox(height: 2),
-                                          Text(
-                                            p.distance! < 1000
-                                                ? '${p.distance!.toStringAsFixed(0)} m away'
-                                                : '${(p.distance! / 1000).toStringAsFixed(1)} km away',
-                                            style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+                                        Flexible(
+                                          child: Text(
+                                            p.name.isNotEmpty ? p.name : 'Unknown Device',
+                                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: cs.onSurface),
+                                            overflow: TextOverflow.ellipsis,
                                           ),
-                                        ],
+                                        ),
+                                        const SizedBox(width: 5),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                                          decoration: BoxDecoration(
+                                            color: cs.surfaceContainerHighest,
+                                            borderRadius: BorderRadius.circular(4),
+                                          ),
+                                          child: Text(
+                                            _distanceLabel(p.id) ?? '—',
+                                            style: TextStyle(fontSize: 10, color: cs.onSurfaceVariant),
+                                          ),
+                                        ),
                                       ],
                                     ),
                                   ),
@@ -973,7 +676,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                     child: Container(
                                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                                       decoration: BoxDecoration(
-                                        color: isRescue ? Colors.blue : isSOS ? Colors.red : Colors.green,
+                                        color: isRescue ? cs.secondary : isSOS ? cs.error : Colors.green,
                                         borderRadius: BorderRadius.circular(8),
                                       ),
                                       child: const Text('Chat', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600)),
@@ -991,11 +694,117 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               ),
             ),
           ),
+          ),
         );
       },
     );
   }
 }
+
+/// แสดงสถานะ scan + permission เพื่อ debug บนอุปกรณ์จริง
+class _ScanDiagnosticBanner extends StatefulWidget {
+  @override
+  State<_ScanDiagnosticBanner> createState() => _ScanDiagnosticBannerState();
+}
+
+class _ScanDiagnosticBannerState extends State<_ScanDiagnosticBanner> {
+  String? _missingPerm;
+  bool _checked = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkPerms();
+  }
+
+  Future<void> _checkPerms() async {
+    final missing = await NearbyTransport.checkPermissions();
+    if (mounted) setState(() { _missingPerm = missing; _checked = true; });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final scanState = appState.transport.discoveryState;
+    final scanError = appState.scanError;
+
+    if (!_checked) return const SizedBox.shrink();
+
+    // ทุกอย่างดี → ไม่แสดง banner
+    if (_missingPerm == null && scanError == null && scanState == DiscoveryState.scanning) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.green.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.green.withValues(alpha: 0.3)),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.sensors, color: Colors.green, size: 16),
+            const SizedBox(width: 8),
+            Text('กำลังสแกน (${appState.selectedProtocol})', style: const TextStyle(fontSize: 12, color: Colors.green)),
+          ],
+        ),
+      );
+    }
+
+    // มีปัญหา → แสดง error banner
+    final isPermanentDenied = scanError?.contains('Settings') == true || scanError?.contains('PERM_PERMANENTLY') == true;
+    final message = _missingPerm != null
+        ? 'ยังไม่ได้อนุญาต: $_missingPerm'
+        : scanError != null
+            ? scanError
+            : scanState == DiscoveryState.idle
+                ? 'Scan ยังไม่ได้เริ่ม (${appState.selectedProtocol})'
+                : 'สถานะ: $scanState';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: cs.errorContainer.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: cs.error.withValues(alpha: 0.4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.warning_amber_rounded, color: cs.error, size: 16),
+              const SizedBox(width: 6),
+              Expanded(child: Text(message, style: TextStyle(fontSize: 12, color: cs.onErrorContainer))),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              if (isPermanentDenied || _missingPerm != null)
+                TextButton.icon(
+                  style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                  onPressed: () => openAppSettings(),
+                  icon: const Icon(Icons.settings, size: 14),
+                  label: const Text('เปิด Settings', style: TextStyle(fontSize: 12)),
+                ),
+              const SizedBox(width: 8),
+              TextButton.icon(
+                style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                onPressed: () async {
+                  await appState.startScan();
+                  _checkPerms();
+                },
+                icon: const Icon(Icons.refresh, size: 14),
+                label: const Text('ลอง Scan ใหม่', style: TextStyle(fontSize: 12)),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class NearbyShareScreen extends StatefulWidget {
   const NearbyShareScreen({super.key});
 
@@ -1046,7 +855,7 @@ class _NearbyShareScreenState extends State<NearbyShareScreen> {
                 // ทำงานใน background
                 appState.stopScan().then((_) {
                   if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
+                    ScaffoldMessenger.of(this.context).showSnackBar(
                       const SnackBar(
                         content: Text('✅ หยุดการสแกนแล้ว'),
                         duration: Duration(seconds: 1),
@@ -1067,7 +876,7 @@ class _NearbyShareScreenState extends State<NearbyShareScreen> {
                 // ทำงานใน background
                 appState.startScan().then((_) {
                   if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
+                    ScaffoldMessenger.of(this.context).showSnackBar(
                       const SnackBar(
                         content: Text('✅ กำลังค้นหาอุปกรณ์รอบข้าง'),
                         duration: Duration(seconds: 1),
@@ -1435,12 +1244,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
       email = '';
       password = '';
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Logged out'),
-        backgroundColor: Colors.blueGrey,
-      ),
-    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Logged out'),
+          backgroundColor: Colors.blueGrey,
+        ),
+      );
+    }
   }
 
   void toggleProtocol(String protocol) {

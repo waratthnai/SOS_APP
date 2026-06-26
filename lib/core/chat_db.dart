@@ -174,13 +174,13 @@ class ChatDB {
     return _mapsToChatMessages(maps);
   }
   
-  // ดึงข้อความที่ส่งแล้วแต่ยังไม่ซิงก์ (sent but not synced)
+  // ดึงข้อความที่ยังไม่ซิงก์ขึ้น Cloud (sent = ส่งออกผ่าน P2P, delivered = รับเข้า)
   static Future<List<ChatMessage>> getUnsyncedMessages(String userId) async {
     final database = await db;
     final maps = await database.query(
       'chat_messages',
-      where: 'user_id = ? AND status = ?',
-      whereArgs: [userId, MessageStatus.sent.name],
+      where: 'user_id = ? AND status IN (?, ?)',
+      whereArgs: [userId, MessageStatus.sent.name, MessageStatus.delivered.name],
       orderBy: 'time ASC',
     );
     return _mapsToChatMessages(maps);

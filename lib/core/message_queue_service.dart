@@ -261,6 +261,7 @@ class MessageQueueService extends ChangeNotifier {
   }
   
   /// ทำลาย Service
+  @override
   void dispose() {
     _retryTimer?.cancel();
     _syncTimer?.cancel();

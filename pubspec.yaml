@@ -39,13 +39,14 @@ dependencies:
   firebase_core: ^4.1.0
   firebase_auth: ^6.0.2
   cloud_firestore: ^6.0.1
+  firebase_storage: ^13.0.1
   firebase_messaging: ^16.0.1
   connectivity_plus: ^7.0.0
   nearby_connections: ^4.3.0
   permission_handler: ^12.0.1
   google_maps_flutter: ^2.3.0
   geolocator: ^10.1.0
-  flutter_blue_plus: ^1.31.15
+  bluetooth_low_energy: ^6.0.0
   sqflite: ^2.3.2
   path_provider: ^2.1.2
   path: ^1.9.0
@@ -55,6 +56,7 @@ dependencies:
   flutter_foreground_task: ^8.15.0
   flutter_local_notifications: ^18.0.1
   google_fonts: ^6.2.1
+  cryptography: ^2.7.0
 
 
 dev_dependencies:

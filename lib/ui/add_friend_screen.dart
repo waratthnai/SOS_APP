@@ -1,7 +1,7 @@
 ﻿// lib/ui/add_friend_screen.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // เพิ่ม import สำหรับ Clipboard
-import 'package:flutter/foundation.dart'; // เพิ่ม import สำหรับ debugPrint
+// เพิ่ม import สำหรับ debugPrint
 import '../core/friend_service.dart';
 import '../core/friend_models.dart';
 import 'package:offgrid_sos/core/logger.dart';
@@ -117,7 +117,7 @@ class _AddFriendScreenState extends State<AddFriendScreen> {
     final cs = Theme.of(context).colorScheme;
     
     return Scaffold(
-      backgroundColor: cs.background,
+      backgroundColor: cs.surface,
       appBar: AppBar(
         title: const Text('เพิ่มเพื่อน', style: TextStyle(fontWeight: FontWeight.bold)),
         backgroundColor: cs.surface,
@@ -158,7 +158,7 @@ class _AddFriendScreenState extends State<AddFriendScreen> {
                       borderRadius: BorderRadius.circular(12),
                     ),
                     filled: true,
-                    fillColor: cs.background,
+                    fillColor: cs.surface,
                   ),
                   onChanged: (value) {
                     setState(() {}); // อัปเดตปุ่มล้าง
@@ -170,7 +170,7 @@ class _AddFriendScreenState extends State<AddFriendScreen> {
                   'คุณสามารถค้นหาด้วยชื่อหรือ User ID (เช่น A7X2M9, K4P3R8)',
                   style: TextStyle(
                     fontSize: 12,
-                    color: cs.onSurface.withOpacity(0.6),
+                    color: cs.onSurface.withValues(alpha: 0.6),
                     fontStyle: FontStyle.italic,
                   ),
                 ),
@@ -203,7 +203,7 @@ class _AddFriendScreenState extends State<AddFriendScreen> {
                 if (currentUser == null) return const SizedBox.shrink();
                 
                 return Card(
-                  color: cs.primaryContainer.withOpacity(0.3),
+                  color: cs.primaryContainer.withValues(alpha: 0.3),
                   child: Padding(
                     padding: const EdgeInsets.all(16),
                     child: Row(
@@ -229,7 +229,7 @@ class _AddFriendScreenState extends State<AddFriendScreen> {
                                 'โปรไฟล์ของคุณ',
                                 style: TextStyle(
                                   fontSize: 12,
-                                  color: cs.onSurface.withOpacity(0.6),
+                                  color: cs.onSurface.withValues(alpha: 0.6),
                                 ),
                               ),
                               Text(
@@ -246,7 +246,7 @@ class _AddFriendScreenState extends State<AddFriendScreen> {
                                       'ID: ${currentUser.id}',
                                       style: TextStyle(
                                         fontSize: 12,
-                                        color: cs.onSurface.withOpacity(0.6),
+                                        color: cs.onSurface.withValues(alpha: 0.6),
                                       ),
                                       overflow: TextOverflow.ellipsis,
                                     ),
@@ -332,14 +332,14 @@ class _AddFriendScreenState extends State<AddFriendScreen> {
             Icon(
               Icons.search,
               size: 64,
-              color: Theme.of(context).colorScheme.onBackground.withOpacity(0.5),
+              color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
             ),
             const SizedBox(height: 16),
             Text(
               'ค้นหาเพื่อนด้วยชื่อ',
               style: TextStyle(
                 fontSize: 18,
-                color: Theme.of(context).colorScheme.onBackground.withOpacity(0.7),
+                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7),
               ),
             ),
             const SizedBox(height: 8),
@@ -347,7 +347,7 @@ class _AddFriendScreenState extends State<AddFriendScreen> {
               'พิมพ์ชื่อในช่องค้นหาด้านบนเพื่อเริ่มต้น',
               style: TextStyle(
                 fontSize: 14,
-                color: Theme.of(context).colorScheme.onBackground.withOpacity(0.5),
+                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
               ),
               textAlign: TextAlign.center,
             ),
@@ -384,7 +384,7 @@ class _AddFriendScreenState extends State<AddFriendScreen> {
               'ข้อความแนะนำตัว (ไม่จำเป็น)',
               style: TextStyle(
                 fontSize: 14,
-                color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7),
+                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7),
               ),
             ),
             const SizedBox(height: 8),
@@ -461,7 +461,7 @@ class _UserTile extends StatelessWidget {
               'ID: ${user.id}',
               style: TextStyle(
                 fontSize: 12,
-                color: cs.onSurface.withOpacity(0.6),
+                color: cs.onSurface.withValues(alpha: 0.6),
               ),
             ),
             if (user.bio != null && user.bio!.isNotEmpty) ...[
@@ -470,7 +470,7 @@ class _UserTile extends StatelessWidget {
                 user.bio!,
                 style: TextStyle(
                   fontSize: 14,
-                  color: cs.onSurface.withOpacity(0.8),
+                  color: cs.onSurface.withValues(alpha: 0.8),
                 ),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,

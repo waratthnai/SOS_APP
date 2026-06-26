@@ -160,7 +160,7 @@ class _ChatFilterBarState extends State<ChatFilterBar> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: DropdownButtonFormField<String>(
-                      value: _filterService.selectedPeer.isNotEmpty 
+                      initialValue: _filterService.selectedPeer.isNotEmpty 
                           ? _filterService.selectedPeer 
                           : 'All',
                       decoration: InputDecoration(

@@ -14,6 +14,8 @@ class WifiDirectTransport implements Transport {
   
   // 📍 เก็บ mapping ระหว่าง peerId กับ actual device name
   final Map<String, String> _peerNames = {};
+  // 🔗 แปลง IP → MAC เพื่อให้ fromPeerId ตรงกับ peer.id ที่มาจาก WifiP2pDevice.deviceAddress
+  final Map<String, String> _ipToMac = {};
 
   static const platform = MethodChannel('wifi_direct');
   static const eventChannel = EventChannel('wifi_direct/events');
@@ -25,7 +27,7 @@ class WifiDirectTransport implements Transport {
   bool _isDiscovering = false;
   DateTime? _lastDiscoveryAttempt;
   int _failedAttempts = 0;
-  static const _minDiscoveryInterval = Duration(seconds: 45); // เพิ่มจาก 15s → 45s เพื่อลด busy
+  static const _minDiscoveryInterval = Duration(seconds: 20);
   
   WifiDirectTransport({String? deviceName}) 
       : deviceName = deviceName ?? 'WiFi Device';
@@ -62,7 +64,7 @@ class WifiDirectTransport implements Transport {
       
       // ✅ ตั้ง timer ให้ค้นหาซ้ำทุก 30 วินาที (เพิ่มจาก 20 เพื่อให้เวลาเชื่อมต่อ)
       _discoveryTimer?.cancel();
-      _discoveryTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      _discoveryTimer = Timer.periodic(const Duration(seconds: 20), (_) {
         Log.d('🔄 [WiFi Direct] Periodic discovery...');
         _triggerDiscovery(); // ฟังก์ชันนี้จะเช็คเงื่อนไขเองแล้ว
       });
@@ -124,35 +126,42 @@ class WifiDirectTransport implements Transport {
             
             Log.d('📶 [WiFi Direct] Raw message received: fromPeerId=$fromPeerId, body=${body.length > 100 ? '${body.substring(0, 100)}...' : body}');
             
-            // 🔧 จัดการ DEVICE_NAME message แยกต่างหาก
+            // จัดการ DEVICE_NAME message แยกต่างหาก
             if (body.startsWith('DEVICE_NAME:')) {
-              final deviceName = body.substring(12); // ตัด "DEVICE_NAME:" ออก
-              _peerNames[fromPeerId] = deviceName;
-              Log.d('📝 [WiFi Direct] Updated peer name: $fromPeerId -> $deviceName');
-              
+              final peerDeviceName = body.substring(12);
+              _peerNames[fromPeerId] = peerDeviceName;
+              Log.d('📝 [WiFi Direct] Updated peer name: $fromPeerId -> $peerDeviceName');
+
+              // สร้าง IP→MAC mapping โดย lookup จาก _currentPeers ด้วยชื่อ
+              // ทำให้ GPS_LOC และ message อื่นๆ ใช้ MAC (peer.id) แทน IP ได้
+              final match = _currentPeers.where((p) => p.name == peerDeviceName).firstOrNull;
+              if (match != null && match.id != fromPeerId) {
+                _ipToMac[fromPeerId] = match.id;
+                Log.d('🔗 [WiFi Direct] IP→MAC: $fromPeerId → ${match.id}');
+              }
+
               // อัปเดต peer list ใหม่
               final peerIndex = _currentPeers.indexWhere((p) => p.id == fromPeerId);
               if (peerIndex >= 0) {
                 _currentPeers[peerIndex] = Peer(
                   id: fromPeerId,
-                  name: deviceName,
+                  name: peerDeviceName,
                   nearby: true,
                 );
-                // ✅ เช็คว่า stream ยังเปิดอยู่ก่อน emit
                 if (!_peersCtrl.isClosed) {
                   _peersCtrl.add(List.from(_currentPeers));
                 }
               }
-              return; // ⚠️ DEVICE_NAME ไม่ส่งต่อไปยัง message stream
+              return; // DEVICE_NAME ไม่ส่งต่อไปยัง message stream
             }
-            
-            // 🔧 ใช้ชื่อที่บันทึกไว้ หรือ fallback เป็น peerId
+
+            // แปลง IP → MAC ก่อน emit เพื่อให้ fromPeerId ตรงกับ peer.id ใน UI
+            final resolvedId = _ipToMac[fromPeerId] ?? fromPeerId;
             final fromName = _peerNames[fromPeerId] ?? fromPeerId;
-            
-            // ✅ ส่งต่อข้อความทั้งหมด (รวม SOS_STATUS, RESCUE_STATUS) ไปยัง app_state
-            Log.d('📶 [WiFi Direct] Forwarding to app: from=$fromName, body=${body.substring(0, body.length > 80 ? 80 : body.length)}...');
+
+            Log.d('📶 [WiFi Direct] Forwarding to app: from=$fromName ($resolvedId), body=${body.substring(0, body.length > 80 ? 80 : body.length)}...');
             _msgCtrl.add(Message(
-              fromPeerId: fromPeerId,
+              fromPeerId: resolvedId,
               body: body,
               time: DateTime.now(),
             ));

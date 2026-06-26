@@ -233,21 +233,21 @@ class MeshTransport implements Transport {
       final meshMessage = _MeshMessage.fromEncoded(message.body);
       
       // Helper function สำหรับ safe substring
-      String _safeSubstring(String str, int maxLen) {
+      String safeSubstring(String str, int maxLen) {
         return str.length > maxLen ? str.substring(0, maxLen) : str;
       }
       
-      Log.d('📡 [MESH] Parsed: id=${_safeSubstring(meshMessage.id, 20)}..., from=${_safeSubstring(meshMessage.from, 20)}..., to=${meshMessage.to}, ttl=${meshMessage.ttl}, hops=${meshMessage.hops.length}');
+      Log.d('📡 [MESH] Parsed: id=${safeSubstring(meshMessage.id, 20)}..., from=${safeSubstring(meshMessage.from, 20)}..., to=${meshMessage.to}, ttl=${meshMessage.ttl}, hops=${meshMessage.hops.length}');
       
       // 🔧 ป้องกันการ process message จากตัวเอง
       if (meshMessage.from == deviceId) {
-        Log.d('📡 [MESH] Ignoring message from self (${_safeSubstring(deviceId, 20)}...)');
+        Log.d('📡 [MESH] Ignoring message from self (${safeSubstring(deviceId, 20)}...)');
         return;
       }
       
       // ตรวจสอบว่าเคยได้รับข้อความนี้แล้วหรือไม่
       if (_messageHistory.containsKey(meshMessage.id)) {
-        Log.d('📡 [MESH] Duplicate message ${_safeSubstring(meshMessage.id, 20)}... - ignored');
+        Log.d('📡 [MESH] Duplicate message ${safeSubstring(meshMessage.id, 20)}... - ignored');
         return;
       }
       
@@ -266,12 +266,12 @@ class MeshTransport implements Transport {
         _routingTable[meshMessage.from] = previousHop;
         _allPeers.add(meshMessage.from);
         
-        Log.d('📡 [MESH] Updated route: ${_safeSubstring(meshMessage.from, 20)}... via ${_safeSubstring(previousHop, 20)}...');
+        Log.d('📡 [MESH] Updated route: ${safeSubstring(meshMessage.from, 20)}... via ${safeSubstring(previousHop, 20)}...');
       } else if (!isFromDirectPeer) {
         // Direct message จาก peer ที่ไม่ได้เชื่อมตรงอยู่แล้ว
         _routingTable[meshMessage.from] = message.fromPeerId;
         _allPeers.add(meshMessage.from);
-        Log.d('📡 [MESH] Direct message from: ${_safeSubstring(meshMessage.from, 20)}... via ${message.fromPeerId}');
+        Log.d('📡 [MESH] Direct message from: ${safeSubstring(meshMessage.from, 20)}... via ${message.fromPeerId}');
       } else {
         // Direct message จาก peer ที่เชื่อมตรงอยู่แล้ว - แค่บันทึกชื่อ ไม่ต้องสร้าง route ใหม่
         Log.d('📡 [MESH] Message from known direct peer ${message.fromPeerId}, skipping route creation');
@@ -398,12 +398,12 @@ class MeshTransport implements Transport {
       // 🔁 Forward ต่อตาม TTL ของข้อความเอง - ใช้กฎเดียวกันทั้ง broadcast และ unicast
       // (เดิม broadcast จะถูก "กิน" ที่ hop แรกเสมอ ทำให้ multi-hop ใช้ไม่ได้จริงสำหรับ HELLO/SOS broadcast)
       if (!isUnicastTerminal && !suppressForward && meshMessage.ttl > 0) {
-        Log.d('📡 [MESH] Forwarding message ${_safeSubstring(meshMessage.id, 20)}... (TTL: ${meshMessage.ttl})');
+        Log.d('📡 [MESH] Forwarding message ${safeSubstring(meshMessage.id, 20)}... (TTL: ${meshMessage.ttl})');
 
         final forwardedMessage = meshMessage.decrementTTL(deviceId);
         await _broadcastMeshMessage(forwardedMessage);
       } else if (!isUnicastTerminal && !suppressForward) {
-        Log.d('📡 [MESH] Message ${_safeSubstring(meshMessage.id, 20)}... expired (TTL=0)');
+        Log.d('📡 [MESH] Message ${safeSubstring(meshMessage.id, 20)}... expired (TTL=0)');
       }
 
     } catch (e, stackTrace) {

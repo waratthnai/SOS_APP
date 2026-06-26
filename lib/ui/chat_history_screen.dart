@@ -408,14 +408,14 @@ class _ChatHistoryScreenState extends State<ChatHistoryScreen> {
                       Icon(
                         Icons.chat_bubble_outline,
                         size: 64,
-                        color: cs.onSurface.withOpacity(0.3),
+                        color: cs.onSurface.withValues(alpha: 0.3),
                       ),
                       const SizedBox(height: 16),
                       Text(
                         'ยังไม่มีการสนทนา',
                         style: TextStyle(
                           fontSize: 18,
-                          color: cs.onSurface.withOpacity(0.6),
+                          color: cs.onSurface.withValues(alpha: 0.6),
                         ),
                       ),
                       const SizedBox(height: 8),
@@ -423,7 +423,7 @@ class _ChatHistoryScreenState extends State<ChatHistoryScreen> {
                         'เริ่มต้นแชทกับเพื่อนของคุณ',
                         style: TextStyle(
                           fontSize: 14,
-                          color: cs.onSurface.withOpacity(0.4),
+                          color: cs.onSurface.withValues(alpha: 0.4),
                         ),
                       ),
                     ],
@@ -449,7 +449,7 @@ class _ChatHistoryScreenState extends State<ChatHistoryScreen> {
                           decoration: BoxDecoration(
                             border: Border(
                               bottom: BorderSide(
-                                color: cs.outline.withOpacity(0.2),
+                                color: cs.outline.withValues(alpha: 0.2),
                                 width: 1,
                               ),
                             ),
@@ -460,7 +460,7 @@ class _ChatHistoryScreenState extends State<ChatHistoryScreen> {
                               CircleAvatar(
                                 radius: 28,
                                 backgroundColor: room.friend != null
-                                    ? Colors.green.withOpacity(0.15)
+                                    ? Colors.green.withValues(alpha: 0.15)
                                     : cs.primaryContainer,
                                 child: Icon(
                                   room.friend != null ? Icons.person_outline : Icons.wifi,
@@ -494,7 +494,7 @@ class _ChatHistoryScreenState extends State<ChatHistoryScreen> {
                                           _formatTime(room.lastMessageTime),
                                           style: TextStyle(
                                             fontSize: 12,
-                                            color: cs.onSurface.withOpacity(0.6),
+                                            color: cs.onSurface.withValues(alpha: 0.6),
                                           ),
                                         ),
                                       ],
@@ -518,7 +518,7 @@ class _ChatHistoryScreenState extends State<ChatHistoryScreen> {
                                             room.lastMessageText ?? lastMsg?.text ?? lastMsg?.type.name ?? '',
                                             style: TextStyle(
                                               fontSize: 14,
-                                              color: cs.onSurface.withOpacity(0.7),
+                                              color: cs.onSurface.withValues(alpha: 0.7),
                                             ),
                                             maxLines: 1,
                                             overflow: TextOverflow.ellipsis,
@@ -601,10 +601,10 @@ class _StatCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
+        color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
-          color: color.withOpacity(0.3),
+          color: color.withValues(alpha: 0.3),
           width: 1,
         ),
       ),
@@ -624,7 +624,7 @@ class _StatCard extends StatelessWidget {
             label,
             style: TextStyle(
               fontSize: 11,
-              color: color.withOpacity(0.8),
+              color: color.withValues(alpha: 0.8),
             ),
             textAlign: TextAlign.center,
           ),

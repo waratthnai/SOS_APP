@@ -45,6 +45,7 @@ class WifiDirectChannel(private val activity: Activity) {
     private var wifiP2pManager: WifiP2pManager? = null
     private var channel: Channel? = null
     private val peers = mutableListOf<WifiP2pDevice>()
+    private var lastEmittedPeerAddresses: Set<String> = emptySet()
     private var serverSocket: ServerSocket? = null
     private var clientSocket: Socket? = null
     private val connectedClients = mutableListOf<Socket>() // 🔧 Track all connected clients
@@ -223,18 +224,16 @@ class WifiDirectChannel(private val activity: Activity) {
         wifiP2pManager?.stopPeerDiscovery(channel, object : WifiP2pManager.ActionListener {
             override fun onSuccess() {
                 Log.d(TAG, "✅ Stopped previous discovery")
-                // เพิ่ม delay เป็น 1000ms (1 วินาที) เพื่อให้ระบบพักผ่อน
                 Handler(Looper.getMainLooper()).postDelayed({
                     startNewDiscovery(result)
-                }, 1000)
+                }, 300)
             }
-            
+
             override fun onFailure(reasonCode: Int) {
                 Log.w(TAG, "⚠️ Failed to stop previous discovery (code: $reasonCode), trying to start anyway...")
-                // เพิ่ม delay เป็น 1500ms เมื่อ stop ล้มเหลว
                 Handler(Looper.getMainLooper()).postDelayed({
                     startNewDiscovery(result)
-                }, 1500)
+                }, 500)
             }
         })
     }
@@ -274,6 +273,7 @@ class WifiDirectChannel(private val activity: Activity) {
         wifiP2pManager?.stopPeerDiscovery(channel, object : WifiP2pManager.ActionListener {
             override fun onSuccess() {
                 peers.clear()
+                lastEmittedPeerAddresses = emptySet()
                 sendPeersToFlutter()
                 closeConnections()
                 Log.d(TAG, "Stopped peer discovery")
@@ -589,25 +589,30 @@ class WifiDirectChannel(private val activity: Activity) {
     }
 
     private fun sendPeersToFlutter() {
+        val currentAddresses = peers.map { it.deviceAddress }.toSet()
+        if (currentAddresses == lastEmittedPeerAddresses) {
+            Log.d(TAG, "⏭️ Peer list unchanged (${peers.size}), skipping emit")
+            return
+        }
+        lastEmittedPeerAddresses = currentAddresses
+
         val peersList = peers.map { device ->
             mapOf(
                 "id" to device.deviceAddress,
                 "name" to (device.deviceName ?: device.deviceAddress)
             )
         }
-        
+
         val data = mapOf(
             "type" to "peers",
             "peers" to peersList
         )
-        
+
         activity.runOnUiThread {
             eventSink?.success(data)
-            Log.d(TAG, "📤 Sent ${peers.size} peers to Flutter")
-            if (peers.isNotEmpty()) {
-                peers.forEach { peer ->
-                    Log.d(TAG, "   • ${peer.deviceName ?: "Unknown"} (${peer.deviceAddress})")
-                }
+            Log.d(TAG, "📤 Peers changed → sent ${peers.size} peers to Flutter")
+            peers.forEach { peer ->
+                Log.d(TAG, "   • ${peer.deviceName ?: "Unknown"} (${peer.deviceAddress})")
             }
         }
     }

@@ -65,9 +65,7 @@ class FCMService extends ChangeNotifier {
   /// ตอน app เริ่มต้น currentUser มักยังเป็น null (ยังโหลดโปรไฟล์ไม่เสร็จ)
   /// ทำให้ token ไม่ถูกบันทึกไปตลอดกาล (รอ onTokenRefresh ซึ่งนานๆเกิดครั้ง)
   Future<void> syncTokenForCurrentUser() async {
-    if (_fcmToken == null) {
-      _fcmToken = await _messaging.getToken();
-    }
+    _fcmToken ??= await _messaging.getToken();
     if (_fcmToken != null) {
       await _updateTokenInFirestore(_fcmToken!);
     }
