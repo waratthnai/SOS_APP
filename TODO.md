@@ -10,6 +10,8 @@
   - `lib/core/ble_transport.dart` และ `lib/core/mesh_transport.dart`
   - ต้องทดสอบ handshake, reconnect, และ message delivery บน physical device
 
+> **WiFi Direct** — ทดสอบผ่านแล้ว ห้ามแก้
+
 - [ ] **WiFi Direct — system confirmation dialog (unavoidable)**
   - Android `WifiP2pManager` บังคับ pop-up ตอน connect ครั้งแรก
   - ไม่มีทาง bypass ผ่าน API — ต้องยอมรับ UX นี้ หรือเปลี่ยนไปใช้ transport อื่น

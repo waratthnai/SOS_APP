@@ -58,5 +58,5 @@ Online features only: Firestore (friend profiles, cloud messages), Firebase Stor
 
 ## Known Active Issues (see note.md)
 
-- **WiFi Direct**: shows system confirmation dialog on first connect (Android `WifiP2pManager` limitation — unavoidable); peer status/distance not displayed
+- **WiFi Direct**: tested and working — do NOT modify. Shows system confirmation dialog on first connect (Android `WifiP2pManager` limitation — unavoidable); peer status/distance not displayed via RSSI (uses GPS diff instead)
 - **BLE/Mesh**: not yet tested on real devices
