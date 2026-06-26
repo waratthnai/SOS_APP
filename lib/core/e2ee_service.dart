@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:cryptography/cryptography.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -15,6 +16,7 @@ import 'logger.dart';
 /// stays stable across sessions (peer can cache our identity key).
 class E2EEService {
   static const _prefKey = 'e2ee_seed_v1';
+  static const _trustedKeyPrefix = 'e2ee_trusted_v1_';
 
   final _x25519 = X25519();
   final _aesGcm = AesGcm.with256bits();
@@ -23,6 +25,10 @@ class E2EEService {
   SimpleKeyPair? _myKeyPair;
   final Map<String, SecretKey> _sessionKeys = {};
   final Set<String> _initiated = {};
+
+  // Emits peerId when a peer reconnects with a different public key than stored.
+  final _keyMismatchController = StreamController<String>.broadcast();
+  Stream<String> get onKeyMismatch => _keyMismatchController.stream;
 
   // ---------------------------------------------------------------------------
   // Init
@@ -69,7 +75,9 @@ class E2EEService {
     Future<void> Function(String body) send,
   ) async {
     if (body.startsWith('E2E_HELLO:')) {
-      final theirPubKey = _parsePublicKey(body.substring('E2E_HELLO:'.length));
+      final keyB64 = body.substring('E2E_HELLO:'.length);
+      await _checkAndStoreTrustedKey(fromPeerId, keyB64);
+      final theirPubKey = _parsePublicKey(keyB64);
       _sessionKeys[fromPeerId] = await _deriveKey(theirPubKey);
       Log.d('[E2EE] Handshake HELLO from $fromPeerId — session established');
 
@@ -81,7 +89,9 @@ class E2EEService {
 
     if (body.startsWith('E2E_ACK:')) {
       if (!_sessionKeys.containsKey(fromPeerId)) {
-        final theirPubKey = _parsePublicKey(body.substring('E2E_ACK:'.length));
+        final keyB64 = body.substring('E2E_ACK:'.length);
+        await _checkAndStoreTrustedKey(fromPeerId, keyB64);
+        final theirPubKey = _parsePublicKey(keyB64);
         _sessionKeys[fromPeerId] = await _deriveKey(theirPubKey);
         Log.d('[E2EE] Handshake ACK from $fromPeerId — session established');
       }
@@ -163,11 +173,29 @@ class E2EEService {
   void dispose() {
     _sessionKeys.clear();
     _initiated.clear();
+    _keyMismatchController.close();
   }
 
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
+
+  /// TOFU: on first contact store the key; on re-contact emit mismatch if key changed.
+  Future<void> _checkAndStoreTrustedKey(String peerId, String incomingB64) async {
+    final prefs = await SharedPreferences.getInstance();
+    final storedB64 = prefs.getString('$_trustedKeyPrefix$peerId');
+
+    if (storedB64 == null) {
+      await prefs.setString('$_trustedKeyPrefix$peerId', incomingB64);
+      Log.d('[E2EE] TOFU: stored trusted key for $peerId');
+      return;
+    }
+
+    if (storedB64 != incomingB64) {
+      Log.d('[E2EE] ⚠️ Key mismatch for $peerId — key changed since last session');
+      _keyMismatchController.add(peerId);
+    }
+  }
 
   Future<List<int>> _pubKeyBytes() async {
     final pub = await _myKeyPair!.extractPublicKey();

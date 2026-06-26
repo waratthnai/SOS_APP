@@ -87,6 +87,8 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   
   // 🔐 E2EE
   final E2EEService _e2ee = E2EEService();
+  final Set<String> _keyMismatchPeers = {};
+  bool hasKeyMismatch(String peerId) => _keyMismatchPeers.contains(peerId);
 
   // 🎯 Background Service
   final BackgroundService _backgroundService = BackgroundService();
@@ -147,6 +149,10 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   AppState({required this.transport}) {
     _e2ee.init(); // generate or load X25519 keypair
+    _e2ee.onKeyMismatch.listen((peerId) {
+      _keyMismatchPeers.add(peerId);
+      notifyListeners();
+    });
     _subs();
     _loadLocalMessages();
     // Initialize friend service

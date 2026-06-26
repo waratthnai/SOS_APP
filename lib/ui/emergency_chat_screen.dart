@@ -661,7 +661,11 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
         children: [
           // Search bar
           _buildSearchBar(),
-          
+
+          // TOFU key-mismatch warning
+          if (appState.hasKeyMismatch(widget.peer.id))
+            _KeyMismatchBanner(peerName: widget.peer.name),
+
           // Messages area
           Expanded(
             child: _buildMessagesList(),
@@ -1286,6 +1290,32 @@ class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
               ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _KeyMismatchBanner extends StatelessWidget {
+  final String peerName;
+  const _KeyMismatchBanner({required this.peerName});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      color: Colors.orange.shade900.withValues(alpha: 0.15),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Row(
+        children: [
+          const Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'คีย์เข้ารหัสของ $peerName เปลี่ยนจากครั้งก่อน — ตรวจสอบตัวตนก่อนส่งข้อมูลสำคัญ',
+              style: const TextStyle(color: Colors.orange, fontSize: 12),
+            ),
+          ),
+        ],
       ),
     );
   }
