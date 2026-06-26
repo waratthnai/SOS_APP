@@ -2930,8 +2930,8 @@ void addChatVideo(String path, {String? receiverId}) async {
   void _startConnectionMonitor() {
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer.periodic(const Duration(seconds: 10), (timer) async {
-      // ถ้าเปิดโหมด SOS หรือ Rescue แต่ไม่มี peer → พยายาม reconnect
-      if ((_isSOSActive || _isRescueMode) && _peers.isEmpty) {
+      // reconnect ทุก mode (รวม passive) เมื่อไม่มี peer และ discovery กำลังทำงานอยู่
+      if (_peers.isEmpty && transport.discoveryState == DiscoveryState.scanning) {
         if (_reconnectAttempts < _maxReconnectAttempts) {
           _reconnectAttempts++;
           Log.d('🔁 Reconnect attempt $_reconnectAttempts/$_maxReconnectAttempts');
