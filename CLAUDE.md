@@ -32,7 +32,7 @@ Four implementations (switchable at runtime via `AppState.selectedProtocol`):
 
 Key timers running in `AppState`:
 - Keep Alive: 30s → sends `KEEP_ALIVE:timestamp` to connected peers
-- Connection Monitor: 10s → reconnects only when SOS/Rescue status active
+- Connection Monitor: 10s → reconnects whenever scanning and no peers connected (all modes)
 - Stable Peers cleanup: 5s → removes peers not seen for 45s
 - Location Broadcast: 8s → sends GPS to peers
 
@@ -58,8 +58,5 @@ Online features only: Firestore (friend profiles, cloud messages), Firebase Stor
 
 ## Known Active Issues (see note.md)
 
-- **WiFi Direct**: shows system confirmation dialog on first connect; peer status/distance not displayed
+- **WiFi Direct**: shows system confirmation dialog on first connect (Android `WifiP2pManager` limitation — unavoidable); peer status/distance not displayed
 - **BLE/Mesh**: not yet tested on real devices
-- **`MeshTransport._startPeriodicScan()`**: timer fires every 20s but body is empty — no actual restart happens
-- **Multiple transport listeners**: switching transport via `_subs()` adds new `onPeers.listen` without cancelling old one
-- **Connection Monitor** only auto-reconnects when SOS or Rescue status is active — passive mode has no reconnect
