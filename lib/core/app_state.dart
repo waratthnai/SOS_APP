@@ -66,6 +66,9 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   StreamSubscription<Position>? _locationStreamSubscription; // 📍 Real-time GPS Stream
   Timer? _keepAliveTimer; // 🔄 Timer สำหรับ keep alive
   Timer? _reconnectTimer; // 🔁 Timer สำหรับ auto reconnect
+  StreamSubscription? _peersSub;
+  StreamSubscription? _msgSub;
+  StreamSubscription? _fileSub;
   bool _isAppInForeground = true; // ติดตามสถานะแอพ
   String? _lastSyncedUserId; // เก็บ userId ล่าสุดที่ซิงก์แล้ว เพื่อป้องกันซิงก์ซ้ำ
 
@@ -737,16 +740,21 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       _pendingFriendSync.map((e) => e['messageId'] as String).toSet();
 
   void _subs() {
+    // ยกเลิก subscriptions เดิมก่อนสร้างใหม่ (ป้องกัน listener leak เมื่อ switch transport)
+    _peersSub?.cancel();
+    _msgSub?.cancel();
+    _fileSub?.cancel();
+
     // เริ่ม broadcast GPS location ทุก 8 วินาที
     _startLocationBroadcast();
-    
+
     // 🔄 เริ่ม Keep Alive ทุก 30 วินาที
     _startKeepAlive();
-    
+
     // 🔁 ตรวจสอบการเชื่อมต่อและ reconnect ทุก 10 วินาที
     _startConnectionMonitor();
-    
-    transport.onPeers.listen((list) {
+
+    _peersSub = transport.onPeers.listen((list) {
       final oldPeerIds = _peers.map((p) => p.id).toSet();
       final oldPeersCount = _peers.length;
       _peers
@@ -813,7 +821,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       
       notifyListeners();
     });
-    transport.onMessage.listen((m) async { // เพิ่ม async
+    _msgSub = transport.onMessage.listen((m) async { // เพิ่ม async
       Log.d('📨 ได้รับข้อความจาก ${m.fromPeerId}: ${m.body}');
       Log.d('🔍 [DEBUG] กำลังประมวลผลข้อความ...');
 
@@ -986,7 +994,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     });
     
     // 📁 รับไฟล์ (ใช้ได้กับทุก transport ที่ implement onFileReceived)
-    transport.onFileReceived.listen((file) async {
+    _fileSub = transport.onFileReceived.listen((file) async {
         Log.d('📁 ได้รับไฟล์จาก ${file.fromPeerId}: ${file.filePath}');
 
         // ตรวจสอบประเภทไฟล์จาก extension
@@ -3266,6 +3274,9 @@ void addChatVideo(String path, {String? receiverId}) async {
     _locationStreamSubscription?.cancel();
     _keepAliveTimer?.cancel();
     _reconnectTimer?.cancel();
+    _peersSub?.cancel();
+    _msgSub?.cancel();
+    _fileSub?.cancel();
     stopBackgroundService(); // ปิด Background Service
     WidgetsBinding.instance.removeObserver(this);
     transport.dispose();
