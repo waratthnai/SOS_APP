@@ -28,6 +28,11 @@ import 'package:cloud_firestore/cloud_firestore.dart' show Timestamp;
 import 'package:offgrid_sos/core/logger.dart';
 import 'e2ee_service.dart';
 
+part 'app_state_location.dart';
+part 'app_state_connection_monitor.dart';
+part 'app_state_stable_peers.dart';
+part 'app_state_online_status.dart';
+
 // 📍 Model สำหรับเก็บตำแหน่ง GPS ของ peer
 class PeerLocation {
   final double latitude;
@@ -57,19 +62,23 @@ class PeerLocation {
   }
 }
 
-class AppState extends ChangeNotifier with WidgetsBindingObserver {
+class AppState extends ChangeNotifier
+    with
+        WidgetsBindingObserver,
+        AppStateLocationMixin,
+        AppStateConnectionMonitorMixin,
+        AppStateStablePeersMixin,
+        AppStateOnlineStatusMixin {
+  @override
   Transport transport;
   String selectedProtocol = 'nearby';
   String _deviceName = 'My Device'; // เพิ่มตัวแปรเก็บชื่อเครื่อง
-  Timer? _onlineStatusTimer; // Timer สำหรับอัปเดตสถานะออนไลน์
-  StreamSubscription<Position>?
-  _locationStreamSubscription; // 📍 Real-time GPS Stream
-  Timer? _keepAliveTimer; // 🔄 Timer สำหรับ keep alive
-  Timer? _reconnectTimer; // 🔁 Timer สำหรับ auto reconnect
   StreamSubscription? _peersSub;
   StreamSubscription? _msgSub;
   StreamSubscription? _fileSub;
   bool _isAppInForeground = true; // ติดตามสถานะแอพ
+  @override
+  bool get isAppInForeground => _isAppInForeground;
   String?
   _lastSyncedUserId; // เก็บ userId ล่าสุดที่ซิงก์แล้ว เพื่อป้องกันซิงก์ซ้ำ
 
@@ -87,9 +96,6 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   /// ใช้ใน FCMService เพื่อตรวจว่าผู้ใช้อยู่ในห้องแชทเพื่อนคนนี้หรือไม่
   bool isActiveFriendChat(String friendUserId) =>
       _activeFriendChatId == friendUserId;
-  int _reconnectAttempts = 0; // 🔁 นับจำนวนครั้งที่พยายามเชื่อมต่อใหม่
-  static const int _maxReconnectAttempts = 5; // 🔁 จำนวนครั้งสูงสุด
-  Position? _myCurrentPosition; // เก็บตำแหน่งปัจจุบันของตัวเอง
 
   // 🔐 E2EE
   final E2EEService _e2ee = E2EEService();
@@ -133,14 +139,13 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   // 🚑 โหมดหน่วยกู้ภัย (Rescue Mode)
   bool _isRescueMode = false;
+  @override
   bool get isRescueMode => _isRescueMode;
 
   // 🚨 โหมด SOS (Emergency SOS Mode)
   bool _isSOSActive = false;
+  @override
   bool get isSOSActive => _isSOSActive;
-
-  // 📍 Getter สำหรับตำแหน่งปัจจุบัน (real-time)
-  Position? get myCurrentPosition => _myCurrentPosition;
 
   // 📡 Auto-Discovery Mode (Passive Listening)
   bool _isPassiveListening = false;
@@ -149,18 +154,6 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   // ❌ scan error message (null = ไม่มีปัญหา)
   String? _scanError;
   String? get scanError => _scanError;
-
-  // 🔄 Stable Peer List - เก็บ peers ที่เคยพบไว้ชั่วคราว
-  final Map<String, Peer> _stablePeers = {};
-  Timer? _peerCleanupTimer;
-  final Map<String, DateTime> _peerLastSeen = {};
-  // 💓 เพิ่ม timeout เป็น 45 วินาที (Keep Alive ส่งทุก 30 วินาที + buffer 15 วินาที)
-  // เพื่อให้มั่นใจว่าไม่ timeout ก่อนรับ Keep Alive ครั้งถัดไป
-  static const Duration _peerTimeout = Duration(seconds: 45);
-
-  // Getter สำหรับ stable peers
-  UnmodifiableListView<Peer> get stablePeers =>
-      UnmodifiableListView(_stablePeers.values);
 
   // 📥 คิวข้อความที่รอส่ง/รอซิงก์ (retry เมื่อเชื่อมต่อกลับมา)
   final MessageQueueService _messageQueue = MessageQueueService();
@@ -382,43 +375,6 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  /// 🔄 อัปเดต Stable Peers List - เก็บ peers ที่เคยเห็นไว้ชั่วคราว
-  void _updateStablePeers(List<Peer> currentPeers) {
-    final now = DateTime.now();
-    bool hasChanges = false;
-
-    // เพิ่ม/อัปเดต peers ที่เห็นอยู่
-    for (final peer in currentPeers) {
-      if (!_stablePeers.containsKey(peer.id)) {
-        hasChanges = true;
-        Log.d('✅ เพิ่ม stable peer: ${peer.name} (${peer.id})');
-      }
-      _stablePeers[peer.id] = peer;
-      _peerLastSeen[peer.id] = now;
-    }
-
-    // ลบ peers ที่ไม่เห็นนานเกินไป (15 วินาที)
-    _peerLastSeen.removeWhere((peerId, lastSeen) {
-      if (now.difference(lastSeen) > _peerTimeout) {
-        _stablePeers.remove(peerId);
-        Log.d('🔄 ลบ peer $peerId (timeout after ${_peerTimeout.inSeconds}s)');
-        hasChanges = true;
-        return true;
-      }
-      return false;
-    });
-
-    // ⚡ เพิ่ม cleanup frequency จาก 10 วินาที → 5 วินาที
-    // เพื่อให้ UI อัปเดตไวขึ้น
-    _peerCleanupTimer ??= Timer.periodic(const Duration(seconds: 5), (_) {
-      _updateStablePeers([]); // เรียกเพื่อทำ cleanup
-    });
-
-    // ⚡ แจ้ง UI ทันทีเมื่อมีการเปลี่ยนแปลง
-    if (hasChanges) {
-      notifyListeners();
-    }
-  }
 
   // Getter และ Setter สำหรับชื่อเครื่อง
   String get deviceName => _deviceName;
@@ -805,6 +761,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   final List<Peer> _peers = [];
   final List<Message> _messages = [];
 
+  @override
   UnmodifiableListView<Peer> get peers => UnmodifiableListView(_peers);
   UnmodifiableListView<Message> get messages => UnmodifiableListView(_messages);
 
@@ -1218,6 +1175,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     });
   }
 
+  @override
   Future<void> startScan() {
     Log.d('🔍 [AppState] startScan() called - Device name: "$_deviceName"');
     // ⚡ Notify listeners ทันทีก่อนเริ่ม scan
@@ -1225,6 +1183,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     return transport.startDiscovery();
   }
 
+  @override
   Future<void> stopScan() {
     // ⚡ Notify listeners ทันทีก่อนหยุด scan
     notifyListeners();
@@ -3190,236 +3149,6 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     return distance;
   }
 
-  // 🎯 กำหนด accuracy/distanceFilter ของ GPS stream ตามโหมดปัจจุบัน
-  // SOS/Rescue = real-time high-accuracy (ต้องรู้ตำแหน่งแม่นยำเพื่อช่วยเหลือ/นำทาง)
-  // Passive = ประหยัดแบต เพราะแค่รอสัญญาณเฉย ๆ ยังไม่ต้องตำแหน่งละเอียดระดับเมตร
-  LocationSettings _currentLocationSettings() {
-    final isActiveMode = _isSOSActive || _isRescueMode;
-    return LocationSettings(
-      accuracy: isActiveMode ? LocationAccuracy.high : LocationAccuracy.medium,
-      distanceFilter: isActiveMode ? 5 : 30,
-    );
-  }
-
-  /// เรียกทุกครั้งที่ SOS/Rescue mode เปลี่ยน เพื่อ restart GPS stream ด้วย
-  /// accuracy/distanceFilter ที่เหมาะกับโหมดใหม่ (ไม่ทำอะไรถ้ายังไม่เคยเริ่ม stream)
-  void _updateLocationBroadcastMode() {
-    if (_locationStreamSubscription != null) {
-      _startLocationBroadcast();
-    }
-  }
-
-  // 📍 เริ่ม Real-time GPS Streaming - อัพเดททันทีเมื่อเคลื่อนที่
-  void _startLocationBroadcast() async {
-    _locationStreamSubscription?.cancel();
-
-    try {
-      // 🔒 เช็ค GPS permission ก่อน
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        Log.d('❌ GPS ถูกปิด - ไม่สามารถ broadcast ตำแหน่งได้');
-        return;
-      }
-
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) {
-          Log.d('❌ ไม่ได้รับ GPS permission - ไม่สามารถ broadcast ตำแหน่งได้');
-          return;
-        }
-      }
-
-      if (permission == LocationPermission.deniedForever) {
-        Log.d('❌ GPS permission ถูกปฏิเสธถาวร');
-        return;
-      }
-
-      // 🎯 LocationSettings ผูกกับโหมด — high-accuracy/real-time เฉพาะตอน SOS/Rescue
-      // ที่ต้องการตำแหน่งแม่นยำจริงๆ ส่วนโหมด passive (แค่เปิดแอพเฉยๆ) ใช้ความแม่นยำ
-      // ปานกลาง + ระยะห่างกว้างขึ้น เพื่อประหยัดแบตในสถานการณ์ที่อาจไม่มีไฟฟ้า/สัญญาณนาน ๆ
-      final locationSettings = _currentLocationSettings();
-
-      // ⚡ ใช้ lastKnownPosition ทันที ก่อนที่ stream จะ fix ได้ (ลด cold-start latency)
-      if (_myCurrentPosition == null) {
-        Geolocator.getLastKnownPosition().then((last) {
-          if (last != null && _myCurrentPosition == null) {
-            _myCurrentPosition = last;
-            Log.d(
-              '📍 [GPS] ใช้ lastKnownPosition: ${last.latitude.toStringAsFixed(5)}, ${last.longitude.toStringAsFixed(5)}',
-            );
-            notifyListeners();
-          }
-        });
-      }
-
-      Log.d('📍 กำลังเริ่ม Real-time GPS Stream...');
-
-      // 📡 เริ่ม listen GPS stream แบบ real-time
-      _locationStreamSubscription =
-          Geolocator.getPositionStream(
-            locationSettings: locationSettings,
-          ).listen(
-            (Position position) {
-              // ⚡ อัพเดทตำแหน่งปัจจุบันทันที
-              _myCurrentPosition = position;
-
-              // 📡 ส่งตำแหน่งไปให้ peers ทันที (ถ้ามี peer)
-              if (_peers.isNotEmpty) {
-                final location = PeerLocation(
-                  latitude: position.latitude,
-                  longitude: position.longitude,
-                  timestamp: DateTime.now(),
-                );
-
-                final message = 'GPS_LOC:${location.toString()}';
-                transport
-                    .sendMessage(message)
-                    .then((_) {
-                      Log.d(
-                        '📍 [Real-time] ส่งตำแหน่ง: ${location.latitude.toStringAsFixed(6)}, ${location.longitude.toStringAsFixed(6)} (±${position.accuracy.toStringAsFixed(1)}m)',
-                      );
-                    })
-                    .catchError((e) {
-                      Log.d('❌ ส่งตำแหน่งล้มเหลว: $e');
-                    });
-              }
-
-              // 🔄 อัพเดท UI ทันที
-              notifyListeners();
-            },
-            onError: (e) {
-              Log.d('❌ GPS Stream Error: $e');
-              // 🔄 ลองเริ่มใหม่หลัง 5 วินาที
-              Future.delayed(const Duration(seconds: 5), () {
-                if (_locationStreamSubscription == null) {
-                  Log.d('🔄 กำลังลอง restart GPS stream...');
-                  _startLocationBroadcast();
-                }
-              });
-            },
-          );
-
-      Log.d(
-        '✅ เริ่ม Real-time GPS Stream สำเร็จ (อัพเดททุก 5m หรือเมื่อเคลื่อนที่)',
-      );
-
-      // Periodic fallback: ส่ง GPS ทุก 30 วินาทีแม้ไม่ขยับ
-      Future.doWhile(() async {
-        await Future.delayed(const Duration(seconds: 30));
-        if (_locationStreamSubscription == null) {
-          return false; // หยุดถ้า stream ถูกยกเลิก
-        }
-        _broadcastCurrentGPS();
-        return true;
-      });
-    } catch (e) {
-      Log.d('❌ ไม่สามารถเริ่ม GPS stream: $e');
-    }
-  }
-
-  /// ส่ง GPS ปัจจุบันให้ peers ทันที (ใช้ตำแหน่งที่แคชไว้ หรือ fetch ใหม่ถ้าไม่มี)
-  void _broadcastCurrentGPS() {
-    if (_peers.isEmpty) return;
-
-    void sendLocation(double lat, double lng) {
-      final loc = PeerLocation(
-        latitude: lat,
-        longitude: lng,
-        timestamp: DateTime.now(),
-      );
-      transport.sendMessage('GPS_LOC:${loc.toString()}').catchError((_) {});
-      Log.d(
-        '📍 [GPS] broadcast: ${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}',
-      );
-    }
-
-    if (_myCurrentPosition != null) {
-      sendLocation(_myCurrentPosition!.latitude, _myCurrentPosition!.longitude);
-    } else {
-      // ยังไม่มีตำแหน่งในแคช → ลอง fetch (medium accuracy = เร็วกว่า high)
-      Geolocator.getCurrentPosition(
-            desiredAccuracy: LocationAccuracy.medium,
-            timeLimit: const Duration(seconds: 8),
-          )
-          .then((pos) {
-            _myCurrentPosition = pos;
-            sendLocation(pos.latitude, pos.longitude);
-            notifyListeners(); // ให้ UI คำนวณระยะห่างใหม่
-          })
-          .catchError((e) {
-            Log.d('⚠️ [GPS] fetch failed: $e');
-          });
-    }
-  }
-
-  /// เรียกจาก UI เพื่อ retry GPS stream (เช่น หลังให้ permission)
-  void retryLocationBroadcast() {
-    if (_locationStreamSubscription == null) {
-      _startLocationBroadcast();
-    }
-  }
-
-  // 📍 หยุด Real-time GPS Stream
-  void _stopLocationBroadcast() {
-    _locationStreamSubscription?.cancel();
-    _locationStreamSubscription = null;
-    _myCurrentPosition = null;
-    Log.d('📍 หยุด Real-time GPS Stream');
-  }
-
-  // � Keep Alive - ส่ง heartbeat ทุก 30 วินาที
-  void _startKeepAlive() {
-    _keepAliveTimer?.cancel();
-    _keepAliveTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
-      if (_peers.isNotEmpty) {
-        // ส่ง keep alive message เพื่อรักษาการเชื่อมต่อ (ไม่ await)
-        try {
-          transport.sendMessage(
-            'KEEP_ALIVE:${DateTime.now().millisecondsSinceEpoch}',
-          ); // ⚡ ไม่ await
-          Log.d('💓 Keep Alive sent to ${_peers.length} peers');
-        } catch (e) {
-          Log.d('❌ Keep Alive failed: $e');
-        }
-      }
-    });
-    Log.d('💓 เริ่ม Keep Alive ทุก 30 วินาที');
-  }
-
-  // 🔁 Connection Monitor - ตรวจสอบและ reconnect ทุก 10 วินาที
-  void _startConnectionMonitor() {
-    _reconnectTimer?.cancel();
-    _reconnectTimer = Timer.periodic(const Duration(seconds: 10), (
-      timer,
-    ) async {
-      // reconnect ทุก mode (รวม passive) เมื่อไม่มี peer และ discovery กำลังทำงานอยู่
-      if (_peers.isEmpty &&
-          transport.discoveryState == DiscoveryState.scanning) {
-        if (_reconnectAttempts < _maxReconnectAttempts) {
-          _reconnectAttempts++;
-          Log.d(
-            '🔁 Reconnect attempt $_reconnectAttempts/$_maxReconnectAttempts',
-          );
-
-          // พยายาม scan ใหม่
-          await stopScan();
-          await Future.delayed(const Duration(seconds: 1));
-          await startScan();
-        } else if (_reconnectAttempts == _maxReconnectAttempts) {
-          Log.d('⚠️ Reconnect failed after $_maxReconnectAttempts attempts');
-          _reconnectAttempts++; // เพิ่มอีก 1 เพื่อไม่ให้ log ซ้ำ
-        }
-      }
-
-      // ถ้ามี peer แล้ว reset counter
-      if (_peers.isNotEmpty && _reconnectAttempts > 0) {
-        _reconnectAttempts = 0;
-      }
-    });
-    Log.d('🔁 เริ่ม Connection Monitor ทุก 10 วินาที');
-  }
-
   // �📍 ส่ง GPS Location ของตัวเองไปให้ peers
   Future<void> broadcastMyLocation() async {
     try {
@@ -3477,58 +3206,6 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
           ? null
           : _messageTimestamps.values.reduce((a, b) => a.isBefore(b) ? a : b),
     };
-  }
-
-  /// เริ่มอัปเดตสถานะออนไลน์แบบอัตโนมัติ (ทุก 5 วินาที)
-  void _startOnlineStatusUpdates() {
-    Log.d('[AppState] 🔧 เริ่มต้น _startOnlineStatusUpdates...');
-    _stopOnlineStatusUpdates(); // ยกเลิก timer เก่าก่อน (ถ้ามี)
-
-    if (friendService.currentUser == null) {
-      Log.d('[AppState] ⚠️ ไม่มี currentUser - ข้าม timer');
-      return;
-    }
-
-    if (!_isAppInForeground) {
-      Log.d('[AppState] ⚠️ แอพไม่ได้อยู่ foreground - ข้าม timer');
-      return;
-    }
-
-    Log.d(
-      '[AppState] ✅ สร้าง Timer สำหรับ ${friendService.currentUser!.name} (${friendService.currentUser!.id})',
-    );
-    // ⚠️ ตั้งใจไม่เช็ค _isAppInForeground ในนี้ — heartbeat ต้องทำงานต่อแม้แอพถูกย่อ/ปิดจอ
-    // เพื่อให้ผู้ขอความช่วยเหลือยังแสดงสถานะ "ออนไลน์" ได้แม้ไม่ได้เฝ้าหน้าจอ (ประหยัดแบต)
-    // Timer นี้จะหยุดทำงานจริงก็ต่อเมื่อ OS ระงับ process (เช่นเข้า Doze mode นานๆ) เท่านั้น
-    _onlineStatusTimer = Timer.periodic(const Duration(seconds: 5), (
-      timer,
-    ) async {
-      if (friendService.currentUser != null &&
-          firebaseService.isOnline &&
-          firebaseService.isSignedIn) {
-        Log.d(
-          '[AppState] 🔄 [Heartbeat] อัปเดตสถานะออนไลน์สำหรับ: ${friendService.currentUser!.name}',
-        );
-        await firebaseService.updateOnlineStatus(
-          friendService.currentUser!.id,
-          true,
-        );
-      } else {
-        Log.d(
-          '[AppState] ⚠️ [Heartbeat] ข้ามการอัปเดต - currentUser=${friendService.currentUser?.name}, online=${firebaseService.isOnline}, signedIn=${firebaseService.isSignedIn}',
-        );
-      }
-    });
-    Log.d('[AppState] ✅ Timer สร้างเสร็จแล้ว - จะอัปเดตทุก 5 วินาที');
-  }
-
-  /// หยุดอัปเดตสถานะออนไลน์
-  void _stopOnlineStatusUpdates() {
-    if (_onlineStatusTimer != null) {
-      Log.d('[AppState] 🛑 หยุด Timer heartbeat');
-    }
-    _onlineStatusTimer?.cancel();
-    _onlineStatusTimer = null;
   }
 
   /// ฟังก์ชันสำหรับ Login - โหลดข้อมูลแชทของ user
@@ -3631,19 +3308,6 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         // แอพถูกซ่อน
         Log.d('[AppState] 🔒 แอพถูกซ่อน');
         break;
-    }
-  }
-
-  /// ตั้งสถานะออนไลน์/ออฟไลน์
-  void _setOnlineStatus(bool isOnline) async {
-    if (friendService.currentUser != null && firebaseService.isSignedIn) {
-      Log.d(
-        '[AppState] 🔄 ตั้งสถานะ: ${isOnline ? "ออนไลน์" : "ออฟไลน์"} สำหรับ ${friendService.currentUser!.name}',
-      );
-      await firebaseService.updateOnlineStatus(
-        friendService.currentUser!.id,
-        isOnline,
-      );
     }
   }
 

@@ -11,9 +11,12 @@
 
 ## สถานะปัจจุบัน
 
-- **กำลังทำ**: เสร็จ Phase 0 แล้ว (baseline + quick wins ทั้งหมด)
-- **ทำล่าสุด**: แก้ lint 18 จุดจาก baseline ครบทุกจุด, `flutter analyze lib` = 0 issues, `flutter test` ผ่านทั้งหมด 29/29
-- **ขั้นต่อไป**: Phase 1 — แตก `lib/core/app_state.dart` (3772 บรรทัด)
+- **กำลังทำ**: Phase 1 — แตก `app_state.dart` ด้วย mixin (ผ่าน `part`/`part of`)
+- **ทำล่าสุด**: แตกออกมาแล้ว 4 กลุ่ม (ดูรายละเอียดใน Phase 1 ด้านล่าง) —
+  `app_state.dart` ลดจาก 3772 → **3438 บรรทัด** ทุกครั้งที่แตกแล้วรัน `flutter analyze lib`
+  (0 issues) + `flutter test` (29/29 ผ่าน) ยืนยันก่อนไปกลุ่มถัดไป
+- **ขั้นต่อไป**: กลุ่มที่เหลือใน `app_state.dart` มี dependency สูงขึ้นเรื่อย ๆ (ผูกกับ SOS/Rescue toggle,
+  Nearby subs, Firebase merge) ต้องวางแผนละเอียดกว่าเดิมก่อนแตะ — ดู "กลุ่มที่เหลือ" ท้าย Phase 1
 
 ---
 
@@ -101,9 +104,43 @@
 
 เป้าหมาย: แตก God object ออกเป็นส่วนย่อยที่ทดสอบ/อ่านง่ายขึ้น โดย **ไม่เปลี่ยน public API ที่ UI เรียกใช้** (เพื่อลดความเสี่ยง regression)
 
-- [ ] สำรวจ/จัดกลุ่ม responsibility ทั้งหมดในไฟล์ (timers, transport switching, chat, friend, notification, GPS, background service sync, E2EE handshake orchestration ฯลฯ)
-- [ ] เขียนรายการ dependency ระหว่างกลุ่ม (อะไรเรียกอะไร) ก่อนแยกไฟล์ เพื่อไม่ให้เกิด circular dependency
-- [ ] แยกเป็น mixin หรือ helper class ทีละกลุ่ม (เริ่มจากกลุ่มที่ dependency น้อยที่สุดก่อน เช่น location broadcast, background service sync)
+- [x] สำรวจ/จัดกลุ่ม responsibility ทั้งหมดในไฟล์ (grep หา method/field ทั้งหมด แบ่งเป็นกลุ่มตามหน้าที่)
+- [x] **เทคนิคที่ใช้แตกไฟล์**: `part`/`part of` (ไม่ใช่ import แยก library) — เพราะ Dart privacy (`_`)
+      เป็นระดับ **library** ไม่ใช่ระดับ class ถ้าแยกเป็น library ใหม่จริง ๆ (import ปกติ) จะเข้าถึง
+      private field/method เดิมของ `AppState` ไม่ได้เลย ต้องใช้ `part of 'app_state.dart';` ในไฟล์ใหม่
+      เพื่อให้ยังอยู่ library เดียวกัน แล้วห่อ group นั้นเป็น `mixin ... on ChangeNotifier { ... }`
+      ที่ประกาศ cross-dependency (เช่น `transport`, `peers`, `isSOSActive`) เป็น **abstract getter**
+      ซึ่ง `AppState` เองมีอยู่แล้วเป็น concrete member (ใส่ `@override` ให้ตรง) — วิธีนี้ทำให้ **ไม่ต้องเปลี่ยน
+      public API ของ AppState เลย** ของเดิมที่ UI เรียกใช้ยังทำงานเหมือนเดิมทุกจุด
+- [x] แยกเป็น mixin ทีละกลุ่ม เริ่มจากกลุ่ม dependency น้อยที่สุดก่อน — **เสร็จแล้ว 4 กลุ่ม**:
+  1. `lib/core/app_state_location.dart` — `AppStateLocationMixin`: GPS real-time broadcast/stream
+     (`_startLocationBroadcast`, `_broadcastCurrentGPS`, `retryLocationBroadcast`, `_stopLocationBroadcast`,
+     field `_myCurrentPosition`/`_locationStreamSubscription`) — ต้องการ abstract `transport`, `peers`,
+     `isSOSActive`, `isRescueMode` (มีอยู่แล้วทั้งหมด)
+  2. `lib/core/app_state_connection_monitor.dart` — `AppStateConnectionMonitorMixin`: keep-alive heartbeat
+     (30s) + connection/reconnect monitor (10s) — ต้องการ abstract `transport`, `peers`, `startScan()`,
+     `stopScan()` (มีอยู่แล้วทั้งหมด)
+  3. `lib/core/app_state_stable_peers.dart` — `AppStateStablePeersMixin`: stable peer list + cleanup timer
+     (5s) — ไม่ต้องการ cross-dependency นอกจาก `notifyListeners()` (มาจาก `on ChangeNotifier`)
+  4. `lib/core/app_state_online_status.dart` — `AppStateOnlineStatusMixin`: Firebase online-status
+     heartbeat (5s) — ต้องการ abstract `isAppInForeground` (เพิ่ม public getter ใหม่ให้ `AppState`
+     เพราะเดิมมีแค่ private field `_isAppInForeground` — เป็น additive change ปลอดภัย)
+
+  ทุกกลุ่มยืนยันด้วย `flutter analyze lib` (0 issues) + `flutter test` (29/29 ผ่าน) แยกกันทีละกลุ่ม
+  ก่อนไปกลุ่มถัดไป — ผลลัพธ์: `app_state.dart` 3772 → **3438 บรรทัด**
+
+- [ ] **กลุ่มที่เหลือ (ยังไม่แตะ) — dependency สูงกว่าเดิมมาก ต้องวางแผนเพิ่มก่อนแตะ**:
+  - `_subs()` (Nearby transport event subscriptions, ~420 บรรทัด) — เป็นจุดศูนย์กลางที่ผูกกับแทบทุกกลุ่ม
+    (chat, SOS, rescue, GPS, friend) การแตกออกมาต้องระวังเรื่องลำดับการเรียก callback มาก
+  - `_mergeFirebaseMessagesIntoState()` (~530 บรรทัด) — ใหญ่สุดในไฟล์ ผูกกับ friend chat + read receipt
+    ที่เพิ่งแก้และยังไม่ได้ทดสอบบนอุปกรณ์จริง (ตาม TODO.md) — ความเสี่ยงสูงถ้าแตกแล้วพลาด ควรรอจนกว่า
+    จะทดสอบ read-receipt flow จริงก่อน หรือแตกแบบระมัดระวังเป็นพิเศษ + เพิ่ม test coverage ก่อนแตะ
+  - `_handleSOSStatus`/`_handleRescueStatus`/`broadcastSOSStatus`/`toggleSOSMode` (~400 บรรทัด รวมกัน) —
+    ผูกกับ background service sync, location broadcast mode, notification พร้อมกันหลายจุด
+  - `_handleReadReceipt`, `_handleGPSLocation`, chat compose/parse (`_composeChatWireBody` ฯลฯ) —
+    กลุ่มกลาง ๆ ผูกกับ E2EE session และ message queue
+  - แนะนำ: ทำ Phase 2 (`main.dart`) หรือ Phase 3 (chat screens) ต่อก่อน แล้วค่อยกลับมาแตะกลุ่มเสี่ยงสูง
+    เหล่านี้ทีหลัง เมื่อมี test coverage ที่ดีขึ้นหรือได้ทดสอบบนอุปกรณ์จริงแล้ว
 - [ ] ลบ dead code / ตัวแปรที่ไม่ใช้ (เช่นเช็คว่า `_isPassiveListening` ที่ note ไว้ใน TODO.md ว่าไม่เคย reset — ตัดสินใจว่าจะแก้หรือปล่อยตามที่ตั้งใจไว้ ถามผู้ใช้ก่อนถ้าเป็น behavior change)
 - [ ] รวม logic ที่ซ้ำกันระหว่าง flow ของ 4 transport ให้เป็นจุดเดียว ถ้าเป็นไปได้
 - [ ] รัน `flutter analyze` + `flutter test` + ทดสอบ manual smoke test (เปิดแอพ, สลับโหมด, เปิดแชท) ก่อนปิด phase
@@ -167,4 +204,9 @@
 - 2026-08-18 — Phase 0 เสร็จสมบูรณ์: รัน baseline analyze, exclude `flutter/` ออกจาก analysis
   (ทำ analyze เร็วขึ้น 700s→10s), แก้ lint quick-win ครบ 18 จุด (รวมลบ dead code
   `_buildSummaryCard`/`_StatCard`/`_allMessages` ใน `chat_history_screen.dart`), analyze = 0 issues,
-  test = 29/29 ผ่าน ยังไม่ได้ commit — รอ Phase 1 (`app_state.dart`) ครั้งหน้า
+  test = 29/29 ผ่าน — commit `f171b8b`
+- 2026-08-18 — Phase 1 (บางส่วน): แตก `app_state.dart` ด้วย `part`/`part of` + mixin สำเร็จ 4 กลุ่ม
+  (location broadcast, connection monitor, stable peers, online status heartbeat) แต่ละกลุ่มยืนยันด้วย
+  analyze (0 issues) + test (29/29) แยกกัน — `app_state.dart` 3772 → 3438 บรรทัด กลุ่มที่เหลือ
+  (`_subs()`, `_mergeFirebaseMessagesIntoState`, SOS/Rescue handling) ผูก dependency แน่นกว่ามาก
+  ต้องวางแผนเพิ่มก่อนแตะ — ดูรายละเอียดใน Phase 1 checklist
