@@ -11,14 +11,14 @@
 
 ## สถานะปัจจุบัน
 
-- **กำลังทำ**: Phase 1 — แตก `app_state.dart` ด้วย mixin (ผ่าน `part`/`part of`)
-- **ทำล่าสุด**: แตกออกมาแล้ว 5 กลุ่ม (ดูรายละเอียดใน Phase 1 ด้านล่าง) รวมกลุ่มใหญ่สุด (SOS/Rescue,
-  ~500 บรรทัด) — `app_state.dart` ลดจาก 3772 → **2944 บรรทัด** (~22%) ทุกครั้งที่แตกแล้วรัน
-  `flutter analyze lib` (0 issues) + `flutter test` (29/29 ผ่าน) ยืนยันก่อนไปกลุ่มถัดไป
-- **ขั้นต่อไป**: เหลือ 4 กลุ่มใหญ่ ทั้งหมดเสี่ยงสูงกว่าที่ทำมาแล้ว — `_subs()` (~400 บรรทัด, ศูนย์กลาง
-  transport event routing), `_mergeFirebaseMessagesIntoState` (~530 บรรทัด, ผูก read-receipt ที่ยังไม่ได้
-  ทดสอบอุปกรณ์จริง), `_handleFriendMessage` (~420 บรรทัด), `_handleReadReceipt`+`_handleGPSLocation`
-  (~320 บรรทัดรวม) — ดู "กลุ่มที่เหลือ" ท้าย Phase 1
+- **กำลังทำ**: Phase 1 เสร็จเกือบสมบูรณ์ — แตก `app_state.dart` ด้วย mixin (ผ่าน `part`/`part of`)
+- **ทำล่าสุด**: แตกออกมาแล้ว 6 กลุ่ม รวมกลุ่มใหญ่สุด **`AppStateEmergencyChatMixin`** (~1500 บรรทัด —
+  รวมทั้งแชทฉุกเฉิน P2P และแชทเพื่อนออนไลน์เข้าด้วยกัน เพราะ dependency พันกันแน่นเกินจะแยกย่อยได้อย่างปลอดภัย)
+  — `app_state.dart` ลดจาก 3772 → **1310 บรรทัด** (**-65%**) ทุกครั้งที่แตกแล้วรัน `flutter analyze lib`
+  (0 issues) + `flutter test` (29/29 ผ่าน) ยืนยันก่อนไปกลุ่มถัดไป
+- **ขั้นต่อไป**: **Phase 1 เสร็จสมบูรณ์แล้ว** (`_subs()` ~400 บรรทัดที่เหลือตัดสินใจไม่แตะ — เป็น
+  wiring/orchestration core ที่เหมาะสมแล้วที่จะอยู่ใน AppState หลัก) — พร้อมเริ่ม **Phase 2 (`lib/main.dart`,
+  1816 บรรทัด)** หรือ **Phase 3 (chat screens)** ครั้งหน้า
 
 ---
 
@@ -102,7 +102,7 @@
 
 ---
 
-## Phase 1 — `lib/core/app_state.dart` (3772 บรรทัด) — ลำดับแรกเพราะเป็นจุดเสี่ยงสูงสุด
+## Phase 1 — `lib/core/app_state.dart` (3772 → 1310 บรรทัด, -65%) — ✅ เสร็จสมบูรณ์
 
 เป้าหมาย: แตก God object ออกเป็นส่วนย่อยที่ทดสอบ/อ่านง่ายขึ้น โดย **ไม่เปลี่ยน public API ที่ UI เรียกใช้** (เพื่อลดความเสี่ยง regression)
 
@@ -135,20 +135,26 @@
      concrete member ของ mixin ก่อนหน้าได้ตรง ๆ โดยไม่ต้องประกาศซ้ำ — วิธีนี้ใช้ได้เพราะ `AppStateLocationMixin`
      ต้องมาก่อน `AppStateSOSRescueMixin` ใน `with` chain ของ `AppState` (ตรวจสอบด้วย compile error ถ้าลำดับผิด)
 
-  ทุกกลุ่มยืนยันด้วย `flutter analyze lib` (0 issues) + `flutter test` (29/29 ผ่าน) แยกกันทีละกลุ่ม
-  ก่อนไปกลุ่มถัดไป — ผลลัพธ์: `app_state.dart` 3772 → **2944 บรรทัด** (ลดลง ~22%)
+  6. `lib/core/app_state_emergency_chat.dart` — `AppStateEmergencyChatMixin`: ก้อนใหญ่สุดในทั้งโปรเจกต์
+     (~1500 บรรทัด) รวม**ทั้งแชทฉุกเฉิน P2P และแชทเพื่อนออนไลน์**เข้าด้วยกัน (ตรงข้ามกับกลุ่มอื่น ๆ ที่แยกย่อย
+     ได้) เพราะทั้งสองระบบใช้ shared state/helper ร่วมกันแน่นมาก (`_chatMessages`, `_friendChats`,
+     `_peerForFriend`, `_generateChatId`, `_e2ee`, `_messageQueue`) — ครอบคลุม: compose/parse wire format,
+     `sendChatText`/`addChatImage`/`addChatVideo`, friend chat listeners (`startFriendChatListener` ฯลฯ),
+     `_mergeFirebaseMessagesIntoState`, ฟังก์ชันส่งข้อความ/รูป/วิดีโอ/ตำแหน่งให้เพื่อนทั้งหมด,
+     `_handleFriendMessage`, `_handleReadReceipt`/`markPeerMessagesAsRead`, `_handleRelayMessage` (mesh),
+     และ sync helper ทั้งหมด (`_syncChatsToFirebase`, `forceSyncWithFirebase` ฯลฯ)
+     — **หมายเหตุ**: `logout()`, `onUserLogin()`, `_subs()` ยังอยู่ใน AppState หลักเพราะเป็นจุด
+     orchestration ข้าม concern (เรียกทั้ง mixin นี้และ mixin อื่น ๆ ผสมกัน) แต่เรียกใช้ field/method
+     ของ mixin นี้ได้ปกติผ่าน same-library access (`part`/`part of`)
 
-- [ ] **กลุ่มที่เหลือ (ยังไม่แตะ) — dependency สูงกว่าเดิมมาก ต้องวางแผนเพิ่มก่อนแตะ**:
-  - `_subs()` (Nearby transport event subscriptions, ~400 บรรทัด) — เป็นจุดศูนย์กลางที่ผูกกับแทบทุกกลุ่ม
-    (chat, SOS, rescue, GPS, friend) การแตกออกมาต้องระวังเรื่องลำดับการเรียก callback มาก
-  - `_mergeFirebaseMessagesIntoState()` (~530 บรรทัด) — ใหญ่สุดในไฟล์ ผูกกับ friend chat + read receipt
-    ที่เพิ่งแก้และยังไม่ได้ทดสอบบนอุปกรณ์จริง (ตาม TODO.md) — ความเสี่ยงสูงถ้าแตกแล้วพลาด ควรรอจนกว่า
-    จะทดสอบ read-receipt flow จริงก่อน หรือแตกแบบระมัดระวังเป็นพิเศษ + เพิ่ม test coverage ก่อนแตะ
-  - `_handleFriendMessage()` (~420 บรรทัด) — ผูกกับ E2EE, friend service, message queue
-  - `_handleReadReceipt`, `_handleGPSLocation`, chat compose/parse (`_composeChatWireBody` ฯลฯ) —
-    กลุ่มกลาง ๆ ผูกกับ E2EE session และ message queue
-  - แนะนำ: ทำ Phase 2 (`main.dart`) หรือ Phase 3 (chat screens) ต่อก่อน แล้วค่อยกลับมาแตะกลุ่มเสี่ยงสูง
-    เหล่านี้ทีหลัง เมื่อมี test coverage ที่ดีขึ้นหรือได้ทดสอบบนอุปกรณ์จริงแล้ว
+  ทุกกลุ่มยืนยันด้วย `flutter analyze lib` (0 issues) + `flutter test` (29/29 ผ่าน) แยกกันทีละกลุ่ม
+  ก่อนไปกลุ่มถัดไป — ผลลัพธ์สุดท้าย: `app_state.dart` 3772 → **1310 บรรทัด (-65%)**
+
+- [x] **`_subs()` (~400 บรรทัด) — ตัดสินใจไม่แตะ (ตั้งใจ)**: เป็น transport event dispatcher
+  ศูนย์กลางที่เรียกใช้ handler จากแทบทุก mixin (`_handleFriendMessage`, `_handleSOSStatus`,
+  `_handleRescueStatus`, `_handleGPSLocation`, `_handleReadReceipt`, `_handleRelayMessage`,
+  E2EE handshake) เหมาะสมแล้วที่จะเป็น "wiring core" ใน AppState หลัก แตกต่อไปจะเพิ่มความเสี่ยง
+  โดยไม่ได้ผลตอบแทนด้าน readability คุ้มค่า — Phase 1 ถือว่า**เสร็จสมบูรณ์**ที่ 1310 บรรทัด
 - [ ] ลบ dead code / ตัวแปรที่ไม่ใช้ (เช่นเช็คว่า `_isPassiveListening` ที่ note ไว้ใน TODO.md ว่าไม่เคย reset — ตัดสินใจว่าจะแก้หรือปล่อยตามที่ตั้งใจไว้ ถามผู้ใช้ก่อนถ้าเป็น behavior change)
 - [ ] รวม logic ที่ซ้ำกันระหว่าง flow ของ 4 transport ให้เป็นจุดเดียว ถ้าเป็นไปได้
 - [ ] รัน `flutter analyze` + `flutter test` + ทดสอบ manual smoke test (เปิดแอพ, สลับโหมด, เปิดแชท) ก่อนปิด phase
@@ -223,3 +229,14 @@
   mixin อื่นตรง ๆ แทน redeclare abstract ซ้ำ (แก้ unused_element lint ปลอม) — analyze 0 issues,
   test 29/29 ผ่าน — `app_state.dart` 3772 → **2944 บรรทัด** (ลดลง ~22%) เหลือ 4 กลุ่มใหญ่ที่เสี่ยงกว่านี้
   (`_subs()`, `_mergeFirebaseMessagesIntoState`, `_handleFriendMessage`, read-receipt/GPS handler)
+- 2026-08-18 — Phase 1 (ต่อ): แตกกลุ่มที่ 6 (peer GPS + mesh network stats, ~170 บรรทัด) สำเร็จ
+  — `app_state.dart` 2944 → 2776 บรรทัด — ผู้ใช้ยืนยันให้ลุยกลุ่มที่เหลือทั้งหมดต่อแม้เสี่ยงสูงสุด
+  (ผูกกับ `_chatMessages`/`_friendChats` โดยตรงทุกจุด) จึงรวม `_subs()` ที่เหลือ (ยกเว้น orchestration
+  หลัก), `_mergeFirebaseMessagesIntoState`, `_handleFriendMessage`, ฟังก์ชันแชทเพื่อนทั้งหมด
+  (`sendFriendChatMessage`/`Image`/`Video`/`Location`, `loadFriendChatMessages`), `_handleReadReceipt`,
+  `markPeerMessagesAsRead`, `_handleRelayMessage`, และฟังก์ชัน sync ทั้งหมด เข้าเป็น **mixin เดียว
+  ก้อนใหญ่ที่สุด** (`AppStateEmergencyChatMixin`, ~1500 บรรทัด) ตามที่ตกลงไว้ — ใช้การลบ block ด้วย
+  PowerShell `RemoveRange` แทน Edit tool เพราะขนาดใหญ่เกินจะ retype ได้แม่นยำ ตรวจสอบ boundary ก่อน/หลัง
+  ลบด้วยมือทุกจุด — analyze พบแค่ 6 จุดขาด `@override` (ไม่มี error เลย ทั้งที่ย้ายโค้ด ~1470 บรรทัด)
+  แก้แล้ว analyze 0 issues, test 29/29 ผ่าน — **`app_state.dart` 3772 → 1310 บรรทัด (-65%)**
+  ตัดสินใจไม่แตะ `_subs()` ที่เหลือต่อ (เป็น wiring core ที่เหมาะจะอยู่ตรงนั้น) — **Phase 1 เสร็จสมบูรณ์**
