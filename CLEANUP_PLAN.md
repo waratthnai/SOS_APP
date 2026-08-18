@@ -159,11 +159,35 @@
 - [ ] รวม logic ที่ซ้ำกันระหว่าง flow ของ 4 transport ให้เป็นจุดเดียว ถ้าเป็นไปได้
 - [ ] รัน `flutter analyze` + `flutter test` + ทดสอบ manual smoke test (เปิดแอพ, สลับโหมด, เปิดแชท) ก่อนปิด phase
 
-## Phase 2 — `lib/main.dart` (1816 บรรทัด)
+## Phase 2 — `lib/main.dart` (1816 → 129 บรรทัด, -93%) — ✅ เสร็จสมบูรณ์
 
-- [ ] แยก widget ย่อยออกจากไฟล์เดียว (screen setup, routing, top-level providers ถ้ามี) ไปเป็นไฟล์ใน `lib/ui/`
-- [ ] เช็คว่ามี business logic หลุดมาอยู่ใน `main.dart` ที่ควรอยู่ใน `app_state.dart` หรือ service อื่นไหม
-- [ ] ลบ import ที่ไม่ใช้, จัดกลุ่ม import ให้เป็นระเบียบ
+- [x] แยก widget ย่อยออกจากไฟล์เดียว ไปเป็นไฟล์ใน `lib/ui/`:
+  - `root_nav.dart` — `RootNav` (bottom nav 5 แท็บ)
+  - `home_screen.dart` — `HomeScreen` + `_ScanDiagnosticBanner` (private helper ใช้เฉพาะในนี้)
+  - `settings_screen.dart` — `SettingsScreen` (ก้อนใหญ่สุด ~700 บรรทัด — login/logout, protocol switch, theme)
+  - `notifications_screen.dart` — `NotificationsScreen`
+  - `nearby_share_screen.dart` — `NearbyShareScreen` (**ดูหมายเหตุด้านล่าง — dead code**)
+  - `main.dart` เหลือแค่ `main()` + `OffGridApp`/`OffGridAppState` (entry point จริง ๆ)
+- [x] **เทคนิคที่ใช้**: ใช้ PowerShell `List<string>.RemoveRange()` ตัด/ย้าย block ข้อความแทน Edit tool
+  เพราะไฟล์ใหญ่เกินจะ retype ได้แม่นยำ — **บทเรียนสำคัญ**: ครั้งแรกที่ทำ range คำนวณผิด (edge case
+  off-by-one ตรง EOF) ทำให้ `RemoveRange` throw exception แต่ script ไม่หยุดทำงานและเขียนไฟล์ที่ถูกตัด
+  ผิดพลาดทับไฟล์เดิม (main.dart เหลือ 203 บรรทัดจากของจริง 1815) กู้คืนด้วย `git checkout -- lib/main.dart`
+  ได้ทันที (ยังไม่ได้ commit) — ทำใหม่โดยเขียนไปที่ไฟล์ `.tmp` ก่อน ตรวจสอบเนื้อหาด้วย Read tool ก่อน
+  ค่อย `mv` ทับไฟล์จริง เพื่อไม่ให้เกิดเหตุการณ์ซ้ำ **บทเรียน: เวลาทำ destructive line-range edit ขนาดใหญ่
+  ด้วย script เสมอเขียนไปไฟล์ชั่วคราวก่อน + ตรวจสอบก่อน overwrite ของจริงเสมอ**
+- [x] เจอ bug จริงจากการย้ายไฟล์: `settings_screen.dart` เข้าถึง `_OffGridAppState`/`_themeMode` ที่เป็น
+  private ของ `main.dart` โดยตรงผ่าน `context.findAncestorStateOfType<_OffGridAppState>()` — พอย้ายออกไป
+  คนละไฟล์ (คนละ library) จะ compile ไม่ผ่านทันที (Dart privacy เป็นระดับไฟล์) แก้โดยเปลี่ยน
+  `_OffGridAppState` → `OffGridAppState` (public) และเพิ่ม public getter `themeMode` ให้ `settings_screen.dart`
+  เรียกแทนการแตะ private field ตรง ๆ — เป็นตัวอย่างที่ดีว่าทำไมต้องรัน `flutter analyze` ทุกครั้งหลังย้ายไฟล์
+- [x] ใช้ `dart fix --apply lib` ล้าง unused import อัตโนมัติ 87 จุดที่เกิดจากการให้ทุกไฟล์ใหม่มี import
+  ชุดเดียวกับ `main.dart` เดิมไปก่อน (ปลอดภัยไว้ก่อนแล้วค่อยล้างทีหลัง) แทนคำนวณ import ที่จำเป็นเป๊ะ ๆ เอง
+- [x] ลบ `dummySwitch1`/`dummySwitch2` (top-level `bool` ที่ไม่ถูกใช้ที่ไหนเลยในโปรเจกต์ — dead code)
+- [ ] **พบ dead code เพิ่ม — ยังไม่ได้ลบ รอถามผู้ใช้ก่อน**: `NearbyShareScreen`
+      (`lib/ui/nearby_share_screen.dart`, ~250 บรรทัด) ไม่ถูก reference จากที่ไหนเลยในแอพ (ไม่มีปุ่ม/route
+      ไหนเปิดหน้านี้) เป็น widget ที่สร้างไว้แต่ไม่เคยเชื่อมเข้า navigation จริง — ต่างจากกรณี
+      `_buildSummaryCard` ใน Phase 0 (แค่ helper เล็ก) เพราะนี่คือทั้งหน้าจอ ควรถามผู้ใช้ก่อนตัดสินใจลบ
+- [x] ยืนยันด้วย `flutter analyze lib` (0 issues) + `flutter test` (29/29 ผ่าน)
 
 ## Phase 3 — Chat screens: `emergency_chat_screen.dart` + `friend_chat_screen.dart` (รวมกัน ~2750 บรรทัด)
 
