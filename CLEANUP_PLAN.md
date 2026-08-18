@@ -11,14 +11,17 @@
 
 ## สถานะปัจจุบัน
 
-- **กำลังทำ**: Phase 1 เสร็จเกือบสมบูรณ์ — แตก `app_state.dart` ด้วย mixin (ผ่าน `part`/`part of`)
-- **ทำล่าสุด**: แตกออกมาแล้ว 6 กลุ่ม รวมกลุ่มใหญ่สุด **`AppStateEmergencyChatMixin`** (~1500 บรรทัด —
-  รวมทั้งแชทฉุกเฉิน P2P และแชทเพื่อนออนไลน์เข้าด้วยกัน เพราะ dependency พันกันแน่นเกินจะแยกย่อยได้อย่างปลอดภัย)
-  — `app_state.dart` ลดจาก 3772 → **1310 บรรทัด** (**-65%**) ทุกครั้งที่แตกแล้วรัน `flutter analyze lib`
-  (0 issues) + `flutter test` (29/29 ผ่าน) ยืนยันก่อนไปกลุ่มถัดไป
-- **ขั้นต่อไป**: **Phase 1 เสร็จสมบูรณ์แล้ว** (`_subs()` ~400 บรรทัดที่เหลือตัดสินใจไม่แตะ — เป็น
-  wiring/orchestration core ที่เหมาะสมแล้วที่จะอยู่ใน AppState หลัก) — พร้อมเริ่ม **Phase 2 (`lib/main.dart`,
-  1816 บรรทัด)** หรือ **Phase 3 (chat screens)** ครั้งหน้า
+- **กำลังทำ**: Phase 0-3 เสร็จสมบูรณ์ทั้งหมดแล้ว
+- **ทำล่าสุด**: Phase 3 — แยก widget ที่ self-contained จริงออกจาก `emergency_chat_screen.dart`
+  (1483 → 949 บรรทัด) ไป `lib/widgets/` ตัดสินใจไม่แตะ `friend_chat_screen.dart` เลยเพราะมี behavior
+  ต่างกันจริง (`videoUrl` support) การรวมจะเสี่ยง regression — analyze 0 issues, test 29/29 ผ่าน
+- **สรุปทั้งหมด**: `app_state.dart` 3772→1310 (-65%), `main.dart` 1815→129 (-93%),
+  `emergency_chat_screen.dart` 1483→949 (-36%), ลบ dead code 2 จุด (`NearbyShareScreen`,
+  `dummySwitch1/2`), quick-win lint 18 จุดใน Phase 0
+- **ขั้นต่อไป**: Phase 4 (transport layer: `nearby_transport.dart`/`ble_transport.dart`/
+  `mesh_transport.dart`/`wifi_direct_transport.dart`) หรือ Phase 5+ (cloud/UI ที่เหลือ) ครั้งหน้า
+  — ดูรายละเอียด constraint สำคัญ (ห้ามแตะ WiFi Direct connect flow, ห้ามเดา behavior ของ BLE/Mesh
+  ที่ยังไม่ได้ทดสอบอุปกรณ์จริง) ใน Phase 4 ด้านล่าง
 
 ---
 
@@ -187,14 +190,27 @@
       test 29/29 ผ่านหลังลบ
 - [x] ยืนยันด้วย `flutter analyze lib` (0 issues) + `flutter test` (29/29 ผ่าน)
 
-## Phase 3 — Chat screens: `emergency_chat_screen.dart` + `friend_chat_screen.dart` (รวมกัน ~2750 บรรทัด)
+## Phase 3 — Chat screens: `emergency_chat_screen.dart` (1483 → 949, -36%) — ✅ เสร็จ (ขอบเขตจำกัดตามที่ตกลง)
 
-สองไฟล์นี้มี UI/logic คล้ายกันมาก (message bubble, status icon, input bar, file picker) — เป้าหมายคือดึงส่วนที่ใช้ร่วมกันออกมาเป็น shared widget/helper ใน `lib/widgets/`
+สำรวจแล้วพบว่า `emergency_chat_screen.dart` (`ChatMessage`) กับ `friend_chat_screen.dart` (`FriendChatMessage`)
+ใช้ message type คนละแบบ การรวม widget ข้าม type จริง ๆ (เช่น `_MessageBubble`) ต้องสร้าง abstraction ใหม่ครอบ
+ทั้งสอง type ซึ่งเสี่ยงเปลี่ยน behavior ของ read-receipt/E2EE ที่ยังไม่ได้ทดสอบบนอุปกรณ์จริง (ตาม TODO.md)
+— **ผู้ใช้ตัดสินใจ**: ทำแค่แยกไฟล์ภายในแต่ละสกุล ไม่รวมข้าม type
 
-- [ ] เทียบสองไฟล์หา logic ที่ซ้ำกัน (message list rendering, read receipt display, file/image handling)
-- [ ] แยก shared widget ออกมา (เช่น message bubble, input toolbar) โดยพารามิเตอร์ต่างที่จำเป็น (P2P vs cloud) ส่งผ่าน props
-- [ ] แยก business logic (การเรียก appState, การ format ข้อความ) ออกจาก build method ให้มากที่สุด
-- [ ] คงพฤติกรรม read-receipt/E2EE ที่เพิ่งแก้ไว้ล่าสุดให้เหมือนเดิมทุกกรณี (มี note ใน TODO.md ว่ายังไม่ได้ทดสอบบนอุปกรณ์จริง — ห้ามเปลี่ยน behavior โดยไม่ตั้งใจ)
+- [x] แยก private widget ที่ **self-contained จริง ๆ** (ไม่ผูกกับ `ChatMessage`/state ของหน้าจอ) ออกจาก
+  `emergency_chat_screen.dart` ไปเป็น public widget ใน `lib/widgets/`:
+  - `full_screen_image_viewer.dart` — `FullScreenImageViewer` + `openFullScreenImage()` helper
+  - `key_mismatch_banner.dart` — `KeyMismatchBanner` (E2EE TOFU warning)
+  - `chat_video_player.dart` — `ChatVideoPlayer` (เล่นวิดีโอในบับเบิลแชท)
+  - `emergency_message_bubble.dart` — `EmergencyMessageBubble` (ผูกกับ `ChatMessage` โดยเฉพาะ — ยังคง
+    เป็น P2P-only ไม่พยายามทำให้ generic ข้าม type)
+- [x] **ตรวจแล้วไม่รวมกับ `friend_chat_screen.dart`**: `_VideoPlayerWidget`/`_FullScreenImageViewer` ของ
+  friend chat หน้าตาคล้ายกันมาก แต่ `_VideoPlayerWidget` ฝั่ง friend chat รองรับ **`videoUrl` (Firebase
+  Storage)** เพิ่มจาก `videoPath` เฉย ๆ ที่ emergency chat มี — ถ้าดันไปใช้ `ChatVideoPlayer` ที่เพิ่งแยกจะ
+  เป็นการ "เงียบ ๆ ตัดความสามารถเล่นวิดีโอจาก URL" ออกไป (regression) จึง**ปล่อย `friend_chat_screen.dart`
+  ไว้ตามเดิมทั้งไฟล์** ไม่แตะเลย เพื่อลดความเสี่ยงตามที่ตกลงกับผู้ใช้
+- [x] ยืนยันด้วย `flutter analyze lib` (0 issues) + `flutter test` (29/29 ผ่าน) — ใช้ `dart fix --apply`
+  ล้าง unused import 2 จุดที่เหลือหลังย้าย
 
 ## Phase 4 — Transport layer: `nearby_transport.dart`, `ble_transport.dart`, `mesh_transport.dart`
 
@@ -262,3 +278,12 @@
   ลบด้วยมือทุกจุด — analyze พบแค่ 6 จุดขาด `@override` (ไม่มี error เลย ทั้งที่ย้ายโค้ด ~1470 บรรทัด)
   แก้แล้ว analyze 0 issues, test 29/29 ผ่าน — **`app_state.dart` 3772 → 1310 บรรทัด (-65%)**
   ตัดสินใจไม่แตะ `_subs()` ที่เหลือต่อ (เป็น wiring core ที่เหมาะจะอยู่ตรงนั้น) — **Phase 1 เสร็จสมบูรณ์**
+- 2026-08-18 — Phase 2 เสร็จสมบูรณ์: แยก `main.dart` (1815→129 บรรทัด, -93%) เป็น 5 ไฟล์หน้าจอใน
+  `lib/ui/` เจอบั๊กจริงจากการย้าย (private class ข้าม library) แก้แล้ว เจอ+ลบ dead code
+  `NearbyShareScreen` (~250 บรรทัด, ผู้ใช้ยืนยัน) และ `dummySwitch1/2` — analyze 0, test 29/29
+- 2026-08-18 — Phase 3 เสร็จ (ขอบเขตจำกัดตามที่ตกลงกับผู้ใช้): แยก widget self-contained ออกจาก
+  `emergency_chat_screen.dart` (1483→949, -36%) ไป `lib/widgets/` (`FullScreenImageViewer`,
+  `KeyMismatchBanner`, `ChatVideoPlayer`, `EmergencyMessageBubble`) ตรวจแล้วไม่รวมกับ
+  `friend_chat_screen.dart` เพราะมี `videoUrl` support ต่างกันจริง (ไม่ใช่แค่หน้าตาคล้ายกัน) —
+  ปล่อย `friend_chat_screen.dart` ไว้ทั้งไฟล์เพื่อลดความเสี่ยง regression — analyze 0, test 29/29
+  — **Phase 0-3 เสร็จสมบูรณ์ทั้งหมด** commit ล่าสุดของ session นี้ก่อนเริ่ม Phase 4
