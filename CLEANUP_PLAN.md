@@ -12,11 +12,13 @@
 ## สถานะปัจจุบัน
 
 - **กำลังทำ**: Phase 1 — แตก `app_state.dart` ด้วย mixin (ผ่าน `part`/`part of`)
-- **ทำล่าสุด**: แตกออกมาแล้ว 4 กลุ่ม (ดูรายละเอียดใน Phase 1 ด้านล่าง) —
-  `app_state.dart` ลดจาก 3772 → **3438 บรรทัด** ทุกครั้งที่แตกแล้วรัน `flutter analyze lib`
-  (0 issues) + `flutter test` (29/29 ผ่าน) ยืนยันก่อนไปกลุ่มถัดไป
-- **ขั้นต่อไป**: กลุ่มที่เหลือใน `app_state.dart` มี dependency สูงขึ้นเรื่อย ๆ (ผูกกับ SOS/Rescue toggle,
-  Nearby subs, Firebase merge) ต้องวางแผนละเอียดกว่าเดิมก่อนแตะ — ดู "กลุ่มที่เหลือ" ท้าย Phase 1
+- **ทำล่าสุด**: แตกออกมาแล้ว 5 กลุ่ม (ดูรายละเอียดใน Phase 1 ด้านล่าง) รวมกลุ่มใหญ่สุด (SOS/Rescue,
+  ~500 บรรทัด) — `app_state.dart` ลดจาก 3772 → **2944 บรรทัด** (~22%) ทุกครั้งที่แตกแล้วรัน
+  `flutter analyze lib` (0 issues) + `flutter test` (29/29 ผ่าน) ยืนยันก่อนไปกลุ่มถัดไป
+- **ขั้นต่อไป**: เหลือ 4 กลุ่มใหญ่ ทั้งหมดเสี่ยงสูงกว่าที่ทำมาแล้ว — `_subs()` (~400 บรรทัด, ศูนย์กลาง
+  transport event routing), `_mergeFirebaseMessagesIntoState` (~530 บรรทัด, ผูก read-receipt ที่ยังไม่ได้
+  ทดสอบอุปกรณ์จริง), `_handleFriendMessage` (~420 บรรทัด), `_handleReadReceipt`+`_handleGPSLocation`
+  (~320 บรรทัดรวม) — ดู "กลุ่มที่เหลือ" ท้าย Phase 1
 
 ---
 
@@ -126,17 +128,23 @@
      heartbeat (5s) — ต้องการ abstract `isAppInForeground` (เพิ่ม public getter ใหม่ให้ `AppState`
      เพราะเดิมมีแค่ private field `_isAppInForeground` — เป็น additive change ปลอดภัย)
 
+  5. `lib/core/app_state_sos_rescue.dart` — `AppStateSOSRescueMixin`: ก้อนใหญ่สุด (~500 บรรทัด) รวม
+     toggle SOS/Rescue mode, broadcast สถานะ, และรับ/จัดการสถานะ SOS/Rescue ของ peer อื่น (`_handleRescueStatus`,
+     `_handleSOSStatus`) — ใช้เทคนิคเพิ่มเติม: `on ChangeNotifier, AppStateLocationMixin` (ระบุ mixin อื่น
+     ใน `on` clause ตรง ๆ แทนที่จะ redeclare `_updateLocationBroadcastMode` เป็น abstract ซ้ำ) ทำให้เข้าถึง
+     concrete member ของ mixin ก่อนหน้าได้ตรง ๆ โดยไม่ต้องประกาศซ้ำ — วิธีนี้ใช้ได้เพราะ `AppStateLocationMixin`
+     ต้องมาก่อน `AppStateSOSRescueMixin` ใน `with` chain ของ `AppState` (ตรวจสอบด้วย compile error ถ้าลำดับผิด)
+
   ทุกกลุ่มยืนยันด้วย `flutter analyze lib` (0 issues) + `flutter test` (29/29 ผ่าน) แยกกันทีละกลุ่ม
-  ก่อนไปกลุ่มถัดไป — ผลลัพธ์: `app_state.dart` 3772 → **3438 บรรทัด**
+  ก่อนไปกลุ่มถัดไป — ผลลัพธ์: `app_state.dart` 3772 → **2944 บรรทัด** (ลดลง ~22%)
 
 - [ ] **กลุ่มที่เหลือ (ยังไม่แตะ) — dependency สูงกว่าเดิมมาก ต้องวางแผนเพิ่มก่อนแตะ**:
-  - `_subs()` (Nearby transport event subscriptions, ~420 บรรทัด) — เป็นจุดศูนย์กลางที่ผูกกับแทบทุกกลุ่ม
+  - `_subs()` (Nearby transport event subscriptions, ~400 บรรทัด) — เป็นจุดศูนย์กลางที่ผูกกับแทบทุกกลุ่ม
     (chat, SOS, rescue, GPS, friend) การแตกออกมาต้องระวังเรื่องลำดับการเรียก callback มาก
   - `_mergeFirebaseMessagesIntoState()` (~530 บรรทัด) — ใหญ่สุดในไฟล์ ผูกกับ friend chat + read receipt
     ที่เพิ่งแก้และยังไม่ได้ทดสอบบนอุปกรณ์จริง (ตาม TODO.md) — ความเสี่ยงสูงถ้าแตกแล้วพลาด ควรรอจนกว่า
     จะทดสอบ read-receipt flow จริงก่อน หรือแตกแบบระมัดระวังเป็นพิเศษ + เพิ่ม test coverage ก่อนแตะ
-  - `_handleSOSStatus`/`_handleRescueStatus`/`broadcastSOSStatus`/`toggleSOSMode` (~400 บรรทัด รวมกัน) —
-    ผูกกับ background service sync, location broadcast mode, notification พร้อมกันหลายจุด
+  - `_handleFriendMessage()` (~420 บรรทัด) — ผูกกับ E2EE, friend service, message queue
   - `_handleReadReceipt`, `_handleGPSLocation`, chat compose/parse (`_composeChatWireBody` ฯลฯ) —
     กลุ่มกลาง ๆ ผูกกับ E2EE session และ message queue
   - แนะนำ: ทำ Phase 2 (`main.dart`) หรือ Phase 3 (chat screens) ต่อก่อน แล้วค่อยกลับมาแตะกลุ่มเสี่ยงสูง
@@ -210,3 +218,8 @@
   analyze (0 issues) + test (29/29) แยกกัน — `app_state.dart` 3772 → 3438 บรรทัด กลุ่มที่เหลือ
   (`_subs()`, `_mergeFirebaseMessagesIntoState`, SOS/Rescue handling) ผูก dependency แน่นกว่ามาก
   ต้องวางแผนเพิ่มก่อนแตะ — ดูรายละเอียดใน Phase 1 checklist
+- 2026-08-18 — Phase 1 (ต่อ): แตกกลุ่มที่ 5 (SOS/Rescue toggle + broadcast + peer status handling,
+  ~500 บรรทัด — ก้อนใหญ่สุดในไฟล์) สำเร็จ ใช้เทคนิค `on ChangeNotifier, AppStateLocationMixin` เพื่ออ้างอิง
+  mixin อื่นตรง ๆ แทน redeclare abstract ซ้ำ (แก้ unused_element lint ปลอม) — analyze 0 issues,
+  test 29/29 ผ่าน — `app_state.dart` 3772 → **2944 บรรทัด** (ลดลง ~22%) เหลือ 4 กลุ่มใหญ่ที่เสี่ยงกว่านี้
+  (`_subs()`, `_mergeFirebaseMessagesIntoState`, `_handleFriendMessage`, read-receipt/GPS handler)
