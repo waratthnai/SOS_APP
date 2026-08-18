@@ -166,7 +166,6 @@
   - `home_screen.dart` — `HomeScreen` + `_ScanDiagnosticBanner` (private helper ใช้เฉพาะในนี้)
   - `settings_screen.dart` — `SettingsScreen` (ก้อนใหญ่สุด ~700 บรรทัด — login/logout, protocol switch, theme)
   - `notifications_screen.dart` — `NotificationsScreen`
-  - `nearby_share_screen.dart` — `NearbyShareScreen` (**ดูหมายเหตุด้านล่าง — dead code**)
   - `main.dart` เหลือแค่ `main()` + `OffGridApp`/`OffGridAppState` (entry point จริง ๆ)
 - [x] **เทคนิคที่ใช้**: ใช้ PowerShell `List<string>.RemoveRange()` ตัด/ย้าย block ข้อความแทน Edit tool
   เพราะไฟล์ใหญ่เกินจะ retype ได้แม่นยำ — **บทเรียนสำคัญ**: ครั้งแรกที่ทำ range คำนวณผิด (edge case
@@ -183,10 +182,9 @@
 - [x] ใช้ `dart fix --apply lib` ล้าง unused import อัตโนมัติ 87 จุดที่เกิดจากการให้ทุกไฟล์ใหม่มี import
   ชุดเดียวกับ `main.dart` เดิมไปก่อน (ปลอดภัยไว้ก่อนแล้วค่อยล้างทีหลัง) แทนคำนวณ import ที่จำเป็นเป๊ะ ๆ เอง
 - [x] ลบ `dummySwitch1`/`dummySwitch2` (top-level `bool` ที่ไม่ถูกใช้ที่ไหนเลยในโปรเจกต์ — dead code)
-- [ ] **พบ dead code เพิ่ม — ยังไม่ได้ลบ รอถามผู้ใช้ก่อน**: `NearbyShareScreen`
-      (`lib/ui/nearby_share_screen.dart`, ~250 บรรทัด) ไม่ถูก reference จากที่ไหนเลยในแอพ (ไม่มีปุ่ม/route
-      ไหนเปิดหน้านี้) เป็น widget ที่สร้างไว้แต่ไม่เคยเชื่อมเข้า navigation จริง — ต่างจากกรณี
-      `_buildSummaryCard` ใน Phase 0 (แค่ helper เล็ก) เพราะนี่คือทั้งหน้าจอ ควรถามผู้ใช้ก่อนตัดสินใจลบ
+- [x] **ลบ dead code แล้ว**: `NearbyShareScreen` (~250 บรรทัด) ไม่ถูก reference จากที่ไหนเลยในแอพ
+      ผู้ใช้ยืนยันให้ลบ — ลบ `lib/ui/nearby_share_screen.dart` ทิ้งทั้งไฟล์ ยืนยัน analyze 0 issues +
+      test 29/29 ผ่านหลังลบ
 - [x] ยืนยันด้วย `flutter analyze lib` (0 issues) + `flutter test` (29/29 ผ่าน)
 
 ## Phase 3 — Chat screens: `emergency_chat_screen.dart` + `friend_chat_screen.dart` (รวมกัน ~2750 บรรทัด)
