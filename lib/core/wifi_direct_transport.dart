@@ -21,8 +21,7 @@ class WifiDirectTransport implements Transport {
   static const eventChannel = EventChannel('wifi_direct/events');
   StreamSubscription? _eventSub;
   Timer? _discoveryTimer; // เพิ่ม timer สำหรับค้นหาซ้ำ
-  Timer? _gpsTimer; // เพิ่ม timer สำหรับส่ง GPS
-  
+
   // 🔧 ป้องกัน "System busy"
   bool _isDiscovering = false;
   DateTime? _lastDiscoveryAttempt;
@@ -260,9 +259,7 @@ class WifiDirectTransport implements Transport {
       // หยุด timer ทั้งหมด
       _discoveryTimer?.cancel();
       _discoveryTimer = null;
-      _gpsTimer?.cancel();
-      _gpsTimer = null;
-      
+
       // 🔧 รีเซ็ต discovery state
       _isDiscovering = false;
       _lastDiscoveryAttempt = null;
@@ -349,7 +346,6 @@ class WifiDirectTransport implements Transport {
     try {
       await stopDiscovery();
       _discoveryTimer?.cancel(); // หยุด discovery timer
-      _gpsTimer?.cancel(); // หยุด GPS timer
       _eventSub?.cancel();
       await _peersCtrl.close();
       await _msgCtrl.close();
