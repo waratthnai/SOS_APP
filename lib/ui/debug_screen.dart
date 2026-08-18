@@ -98,6 +98,7 @@ class DebugScreen extends StatelessWidget {
               ElevatedButton.icon(
                 onPressed: () async {
                   await friendService.syncWithFirebase();
+                  if (!context.mounted) return;
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text('Sync แล้ว! ดู log ใน console')),
                   );
@@ -110,6 +111,7 @@ class DebugScreen extends StatelessWidget {
                 ElevatedButton.icon(
                   onPressed: () async {
                     await firebaseService.saveFullUserProfile(user);
+                    if (!context.mounted) return;
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(content: Text('บันทึกโปรไฟล์ขึ้น Firebase แล้ว!')),
                     );
@@ -122,6 +124,7 @@ class DebugScreen extends StatelessWidget {
                   onPressed: () async {
                     // ทดสอบค้นหา User ID ของตัวเอง
                     final result = await firebaseService.findUserByUserId(user.id);
+                    if (!context.mounted) return;
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
                         content: Text(result != null 
@@ -143,7 +146,7 @@ class DebugScreen extends StatelessWidget {
                     Log.d('🔍 [Debug] กำลังตรวจสอบข้อมูลเพื่อนใน Firebase...');
                     final friends = await firebaseService.getUserFriends(user.id);
                     Log.d('📊 [Debug] ผลลัพธ์: พบ ${friends.length} เพื่อนใน Firebase');
-                    
+                    if (!context.mounted) return;
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
                         content: Text('พบ ${friends.length} เพื่อนใน Firebase\nดู logs สำหรับรายละเอียด'),

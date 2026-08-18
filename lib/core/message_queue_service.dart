@@ -1,4 +1,4 @@
-﻿// lib/core/message_queue_service.dart
+// lib/core/message_queue_service.dart
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
@@ -14,14 +14,14 @@ class MessageQueueService extends ChangeNotifier {
 
   // คิวข้อความที่รอส่ง (pending messages)
   final List<ChatMessage> _pendingQueue = [];
-  
+
   // คิวข้อความที่รอซิงก์ขึ้น Cloud (sent but not synced)
   final List<ChatMessage> _syncQueue = [];
-  
+
   // สถานะการเชื่อมต่อ
   bool _isOnline = false;
   bool _isP2PConnected = false;
-  
+
   // Timer สำหรับ retry
   Timer? _retryTimer;
   Timer? _syncTimer;
@@ -45,19 +45,19 @@ class MessageQueueService extends ChangeNotifier {
   List<ChatMessage> get syncQueue => List.unmodifiable(_syncQueue);
   bool get isOnline => _isOnline;
   bool get isP2PConnected => _isP2PConnected;
-  
+
   /// เริ่มต้น Service
   Future<void> init() async {
     await _loadQueuesFromStorage();
     _startRetryTimer();
     _startSyncTimer();
   }
-  
+
   /// โหลดคิวจาก SharedPreferences
   Future<void> _loadQueuesFromStorage() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      
+
       // โหลด pending queue
       final pendingJson = prefs.getString('pending_messages');
       if (pendingJson != null) {
@@ -67,7 +67,7 @@ class MessageQueueService extends ChangeNotifier {
           list.map((json) => ChatMessage.fromJson(json)).toList(),
         );
       }
-      
+
       // โหลด sync queue
       final syncJson = prefs.getString('sync_messages');
       if (syncJson != null) {
@@ -77,36 +77,38 @@ class MessageQueueService extends ChangeNotifier {
           list.map((json) => ChatMessage.fromJson(json)).toList(),
         );
       }
-      
-      Log.d('📦 โหลดคิวข้อความ: ${_pendingQueue.length} รอส่ง, ${_syncQueue.length} รอซิงก์');
+
+      Log.d(
+        '📦 โหลดคิวข้อความ: ${_pendingQueue.length} รอส่ง, ${_syncQueue.length} รอซิงก์',
+      );
     } catch (e) {
       Log.d('❌ โหลดคิวไม่สำเร็จ: $e');
     }
   }
-  
+
   /// บันทึกคิวลง SharedPreferences
   Future<void> _saveQueuesToStorage() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      
+
       // บันทึก pending queue
       final pendingJson = jsonEncode(
         _pendingQueue.map((msg) => msg.toJson()).toList(),
       );
       await prefs.setString('pending_messages', pendingJson);
-      
+
       // บันทึก sync queue
       final syncJson = jsonEncode(
         _syncQueue.map((msg) => msg.toJson()).toList(),
       );
       await prefs.setString('sync_messages', syncJson);
-      
+
       Log.d('💾 บันทึกคิวข้อความแล้ว');
     } catch (e) {
       Log.d('❌ บันทึกคิวไม่สำเร็จ: $e');
     }
   }
-  
+
   /// เพิ่มข้อความเข้าคิว (เมื่อส่งไม่สำเร็จ)
   Future<void> addToPendingQueue(ChatMessage message) async {
     _pendingQueue.add(message.copyWith(status: MessageStatus.pending));
@@ -114,19 +116,19 @@ class MessageQueueService extends ChangeNotifier {
     notifyListeners();
     Log.d('📥 เพิ่มข้อความเข้าคิว: ${message.id}');
   }
-  
+
   /// เพิ่มข้อความเข้าคิวซิงก์ (เมื่อส่ง P2P สำเร็จแล้ว)
   Future<void> addToSyncQueue(ChatMessage message) async {
     // ลบออกจาก pending queue ถ้ามี
     _pendingQueue.removeWhere((m) => m.id == message.id);
-    
+
     // เพิ่มเข้า sync queue
     _syncQueue.add(message.copyWith(status: MessageStatus.sent));
     await _saveQueuesToStorage();
     notifyListeners();
     Log.d('📤 เพิ่มข้อความเข้าคิวซิงก์: ${message.id}');
   }
-  
+
   /// ลบข้อความออกจากคิว (เมื่อซิงก์สำเร็จแล้ว)
   Future<void> removeFromSyncQueue(String messageId) async {
     _syncQueue.removeWhere((m) => m.id == messageId);
@@ -134,29 +136,29 @@ class MessageQueueService extends ChangeNotifier {
     notifyListeners();
     Log.d('✅ ลบข้อความออกจากคิวซิงก์: $messageId');
   }
-  
+
   /// อัพเดทสถานะการเชื่อมต่อ P2P
   void updateP2PConnection(bool connected) {
     _isP2PConnected = connected;
     notifyListeners();
-    
+
     if (connected && _pendingQueue.isNotEmpty) {
       Log.d('🔄 เชื่อมต่อ P2P แล้ว - พยายามส่งข้อความที่ค้างอยู่');
       _retryPendingMessages();
     }
   }
-  
+
   /// อัพเดทสถานะการเชื่อมต่ออินเทอร์เน็ต
   void updateOnlineStatus(bool online) {
     _isOnline = online;
     notifyListeners();
-    
+
     if (online && _syncQueue.isNotEmpty) {
       Log.d('🌐 ออนไลน์แล้ว - พยายามซิงก์ข้อความ');
       _syncToCloud();
     }
   }
-  
+
   /// Timer สำหรับ retry ส่งข้อความที่ค้างอยู่
   void _startRetryTimer() {
     _retryTimer?.cancel();
@@ -166,7 +168,7 @@ class MessageQueueService extends ChangeNotifier {
       }
     });
   }
-  
+
   /// Timer สำหรับซิงก์ข้อความขึ้น Cloud
   void _startSyncTimer() {
     _syncTimer?.cancel();
@@ -176,7 +178,7 @@ class MessageQueueService extends ChangeNotifier {
       }
     });
   }
-  
+
   /// retry ข้อความชิ้นเดียวจาก messageId (ใช้จาก UI)
   Future<void> retryMessage(String messageId) async {
     if (_sendHandler == null) return;
@@ -237,7 +239,7 @@ class MessageQueueService extends ChangeNotifier {
       }
     }
   }
-  
+
   /// ดึงสถานะของข้อความ
   MessageStatus getMessageStatus(String messageId) {
     // เช็คว่าอยู่ในคิวไหน
@@ -250,7 +252,7 @@ class MessageQueueService extends ChangeNotifier {
     // ถ้าไม่อยู่ในคิวแสดงว่าซิงก์แล้ว
     return MessageStatus.synced;
   }
-  
+
   /// ล้างคิวทั้งหมด
   Future<void> clearAllQueues() async {
     _pendingQueue.clear();
@@ -259,7 +261,7 @@ class MessageQueueService extends ChangeNotifier {
     notifyListeners();
     Log.d('🗑️ ล้างคิวข้อความทั้งหมดแล้ว');
   }
-  
+
   /// ทำลาย Service
   @override
   void dispose() {

@@ -753,11 +753,10 @@ class _ScanDiagnosticBannerState extends State<_ScanDiagnosticBanner> {
     final isPermanentDenied = scanError?.contains('Settings') == true || scanError?.contains('PERM_PERMANENTLY') == true;
     final message = _missingPerm != null
         ? 'ยังไม่ได้อนุญาต: $_missingPerm'
-        : scanError != null
-            ? scanError
-            : scanState == DiscoveryState.idle
+        : scanError ??
+            (scanState == DiscoveryState.idle
                 ? 'Scan ยังไม่ได้เริ่ม (${appState.selectedProtocol})'
-                : 'สถานะ: $scanState';
+                : 'สถานะ: $scanState');
 
     return Container(
       width: double.infinity,
@@ -1763,6 +1762,7 @@ class NotificationsScreen extends StatelessWidget {
           SliverAppBar(
             pinned: true,
             expandedHeight: 120,
+            automaticallyImplyLeading: false,
             flexibleSpace: FlexibleSpaceBar(
               title: Row(
                 children: [
@@ -1780,9 +1780,14 @@ class NotificationsScreen extends StatelessWidget {
                   ),
                   const SizedBox(width: 12),
                   Text('การแจ้งเตือน', style: theme.textTheme.headlineSmall),
+                  const Spacer(),
+                  IconButton(
+                    icon: const Icon(Icons.arrow_back),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
                 ],
               ),
-              titlePadding: const EdgeInsets.only(left: 16, bottom: 16),
+              titlePadding: const EdgeInsets.only(left: 16, right: 8, bottom: 8),
             ),
             actions: [
               ListenableBuilder(

@@ -6,6 +6,7 @@ import '../core/app_state.dart'; // เพิ่ม import AppState
 import 'friend_chat_screen.dart';
 import 'add_friend_screen.dart';
 import 'friend_requests_screen.dart';
+import 'friend_profile_screen.dart';
 
 class FriendsScreen extends StatefulWidget {
   const FriendsScreen({super.key});
@@ -14,7 +15,8 @@ class FriendsScreen extends StatefulWidget {
   State<FriendsScreen> createState() => _FriendsScreenState();
 }
 
-class _FriendsScreenState extends State<FriendsScreen> with SingleTickerProviderStateMixin {
+class _FriendsScreenState extends State<FriendsScreen>
+    with SingleTickerProviderStateMixin {
   late TabController _tabController;
   bool _isRefreshing = false;
 
@@ -22,7 +24,7 @@ class _FriendsScreenState extends State<FriendsScreen> with SingleTickerProvider
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
-    
+
     // 🔥 Sync ทันทีเมื่อเข้าหน้านี้
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _refresh();
@@ -37,7 +39,7 @@ class _FriendsScreenState extends State<FriendsScreen> with SingleTickerProvider
 
   Future<void> _refresh() async {
     if (_isRefreshing) return;
-    
+
     setState(() => _isRefreshing = true);
     try {
       await friendService.syncWithFirebase();
@@ -51,22 +53,28 @@ class _FriendsScreenState extends State<FriendsScreen> with SingleTickerProvider
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    
+
     return Scaffold(
       backgroundColor: cs.surface,
       appBar: AppBar(
-        title: const Text('เพื่อน', style: TextStyle(fontWeight: FontWeight.bold)),
+        title: const Text(
+          'เพื่อน',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
         backgroundColor: cs.surface,
         actions: [
           // ปุ่ม Refresh
           IconButton(
-            icon: _isRefreshing 
-              ? const SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                )
-              : const Icon(Icons.refresh),
+            icon: _isRefreshing
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Icon(Icons.refresh),
             onPressed: _isRefreshing ? null : _refresh,
             tooltip: 'รีเฟรช',
           ),
@@ -82,7 +90,9 @@ class _FriendsScreenState extends State<FriendsScreen> with SingleTickerProvider
                     onPressed: () {
                       Navigator.push(
                         context,
-                        MaterialPageRoute(builder: (context) => const FriendRequestsScreen()),
+                        MaterialPageRoute(
+                          builder: (context) => const FriendRequestsScreen(),
+                        ),
                       );
                     },
                   ),
@@ -121,7 +131,9 @@ class _FriendsScreenState extends State<FriendsScreen> with SingleTickerProvider
             onPressed: () {
               Navigator.push(
                 context,
-                MaterialPageRoute(builder: (context) => const AddFriendScreen()),
+                MaterialPageRoute(
+                  builder: (context) => const AddFriendScreen(),
+                ),
               );
             },
           ),
@@ -137,14 +149,8 @@ class _FriendsScreenState extends State<FriendsScreen> with SingleTickerProvider
       body: TabBarView(
         controller: _tabController,
         children: [
-          RefreshIndicator(
-            onRefresh: _refresh,
-            child: _AllFriendsTab(),
-          ),
-          RefreshIndicator(
-            onRefresh: _refresh,
-            child: _OnlineFriendsTab(),
-          ),
+          RefreshIndicator(onRefresh: _refresh, child: _AllFriendsTab()),
+          RefreshIndicator(onRefresh: _refresh, child: _OnlineFriendsTab()),
         ],
       ),
     );
@@ -164,7 +170,7 @@ class _AllFriendsTab extends StatelessWidget {
         }
 
         final friends = friendService.friends;
-        
+
         if (friends.isEmpty) {
           return Center(
             child: Column(
@@ -173,14 +179,18 @@ class _AllFriendsTab extends StatelessWidget {
                 Icon(
                   Icons.people_outline,
                   size: 80,
-                  color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.onSurface.withValues(alpha: 0.5),
                 ),
                 const SizedBox(height: 16),
                 Text(
                   'ยังไม่มีเพื่อน',
                   style: TextStyle(
                     fontSize: 18,
-                    color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7),
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.onSurface.withValues(alpha: 0.7),
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -188,7 +198,9 @@ class _AllFriendsTab extends StatelessWidget {
                   'เริ่มต้นการค้นหาและเพิ่มเพื่อนกันเถอะ!',
                   style: TextStyle(
                     fontSize: 14,
-                    color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.onSurface.withValues(alpha: 0.5),
                   ),
                   textAlign: TextAlign.center,
                 ),
@@ -197,7 +209,9 @@ class _AllFriendsTab extends StatelessWidget {
                   onPressed: () {
                     Navigator.push(
                       context,
-                      MaterialPageRoute(builder: (context) => const AddFriendScreen()),
+                      MaterialPageRoute(
+                        builder: (context) => const AddFriendScreen(),
+                      ),
                     );
                   },
                   icon: const Icon(Icons.person_add),
@@ -223,14 +237,14 @@ class _AllFriendsTab extends StatelessWidget {
 
 class _OnlineFriendsTab extends StatelessWidget {
   const _OnlineFriendsTab();
-  
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: friendService,
       builder: (context, _) {
         final onlineFriends = friendService.onlineFriends;
-        
+
         if (onlineFriends.isEmpty) {
           return Center(
             child: Column(
@@ -239,14 +253,18 @@ class _OnlineFriendsTab extends StatelessWidget {
                 Icon(
                   Icons.wifi_off,
                   size: 80,
-                  color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.onSurface.withValues(alpha: 0.5),
                 ),
                 const SizedBox(height: 16),
                 Text(
                   'ไม่มีเพื่อนออนไลน์',
                   style: TextStyle(
                     fontSize: 18,
-                    color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7),
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.onSurface.withValues(alpha: 0.7),
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -254,7 +272,9 @@ class _OnlineFriendsTab extends StatelessWidget {
                   'เพื่อนของคุณจะปรากฏที่นี่เมื่อพวกเขาออนไลน์',
                   style: TextStyle(
                     fontSize: 14,
-                    color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.onSurface.withValues(alpha: 0.5),
                   ),
                   textAlign: TextAlign.center,
                 ),
@@ -284,105 +304,118 @@ class _FriendTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    
+
     // ตรวจสอบสถานะ SOS/Rescue (ใช้ friend.id เป็น peer ID)
     // 🔧 ใช้ friend.name แทน friend.id เพื่อรองรับ mesh (ที่มีหลาย ID แต่ name เดียว)
     final isSOSActive = appState.isSOSPeer(friend.name);
     final isRescueActive = appState.isRescuePeer(friend.name);
-    
+
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 4),
       child: ListTile(
-        leading: Stack(
-          children: [
-            CircleAvatar(
-              radius: 25,
-              backgroundColor: isSOSActive
-                  ? Colors.red.withValues(alpha: 0.2)
-                  : isRescueActive
-                      ? Colors.blue.withValues(alpha: 0.2)
-                      : cs.primaryContainer,
-              backgroundImage: friend.avatar != null 
-                ? NetworkImage(friend.avatar!) 
-                : null,
-              child: friend.avatar == null 
-                ? Text(
-                    friend.name.isNotEmpty ? friend.name[0].toUpperCase() : '?',
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: isSOSActive
-                          ? Colors.red
-                          : isRescueActive
+        leading: GestureDetector(
+          // กดที่รูปโปรไฟล์ → ไปหน้าโปรไฟล์เพื่อน (แยกจากกดที่เหลือของ tile ที่เปิดแชท)
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => FriendProfileScreen(friend: friend),
+              ),
+            );
+          },
+          child: Stack(
+            children: [
+              CircleAvatar(
+                radius: 25,
+                backgroundColor: isSOSActive
+                    ? Colors.red.withValues(alpha: 0.2)
+                    : isRescueActive
+                    ? Colors.blue.withValues(alpha: 0.2)
+                    : cs.primaryContainer,
+                backgroundImage: friend.avatar != null
+                    ? NetworkImage(friend.avatar!)
+                    : null,
+                child: friend.avatar == null
+                    ? Text(
+                        friend.name.isNotEmpty
+                            ? friend.name[0].toUpperCase()
+                            : '?',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: isSOSActive
+                              ? Colors.red
+                              : isRescueActive
                               ? Colors.blue
                               : cs.onPrimaryContainer,
+                        ),
+                      )
+                    : null,
+              ),
+              // SOS Badge (สีแดง - มีความสำคัญสูงสุด)
+              if (isSOSActive)
+                Positioned(
+                  bottom: 0,
+                  right: 0,
+                  child: Container(
+                    width: 18,
+                    height: 18,
+                    decoration: BoxDecoration(
+                      color: Colors.red,
+                      border: Border.all(color: Colors.white, width: 2),
+                      borderRadius: BorderRadius.circular(9),
                     ),
-                  )
-                : null,
-            ),
-            // SOS Badge (สีแดง - มีความสำคัญสูงสุด)
-            if (isSOSActive)
-              Positioned(
-                bottom: 0,
-                right: 0,
-                child: Container(
-                  width: 18,
-                  height: 18,
-                  decoration: BoxDecoration(
-                    color: Colors.red,
-                    border: Border.all(color: Colors.white, width: 2),
-                    borderRadius: BorderRadius.circular(9),
-                  ),
-                  child: const Center(
-                    child: Text(
-                      '!',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
+                    child: const Center(
+                      child: Text(
+                        '!',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                     ),
                   ),
-                ),
-              )
-            // Rescue Badge (สีน้ำเงิน)
-            else if (isRescueActive)
-              Positioned(
-                bottom: 0,
-                right: 0,
-                child: Container(
-                  width: 18,
-                  height: 18,
-                  decoration: BoxDecoration(
-                    color: Colors.blue,
-                    border: Border.all(color: Colors.white, width: 2),
-                    borderRadius: BorderRadius.circular(9),
+                )
+              // Rescue Badge (สีน้ำเงิน)
+              else if (isRescueActive)
+                Positioned(
+                  bottom: 0,
+                  right: 0,
+                  child: Container(
+                    width: 18,
+                    height: 18,
+                    decoration: BoxDecoration(
+                      color: Colors.blue,
+                      border: Border.all(color: Colors.white, width: 2),
+                      borderRadius: BorderRadius.circular(9),
+                    ),
+                    child: const Center(
+                      child: Icon(
+                        Icons.local_hospital,
+                        color: Colors.white,
+                        size: 10,
+                      ),
+                    ),
                   ),
-                  child: const Center(
-                    child: Icon(
-                      Icons.local_hospital,
-                      color: Colors.white,
-                      size: 10,
+                )
+              // Online status indicator (แสดงเฉพาะเมื่อไม่มี SOS/Rescue)
+              else if (friend.isOnline)
+                Positioned(
+                  bottom: 0,
+                  right: 0,
+                  child: Container(
+                    width: 16,
+                    height: 16,
+                    decoration: BoxDecoration(
+                      color: Colors.green,
+                      border: Border.all(color: Colors.white, width: 2),
+                      borderRadius: BorderRadius.circular(8),
                     ),
                   ),
                 ),
-              )
-            // Online status indicator (แสดงเฉพาะเมื่อไม่มี SOS/Rescue)
-            else if (friend.isOnline)
-              Positioned(
-                bottom: 0,
-                right: 0,
-                child: Container(
-                  width: 16,
-                  height: 16,
-                  decoration: BoxDecoration(
-                    color: Colors.green,
-                    border: Border.all(color: Colors.white, width: 2),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                ),
-              ),
-          ],
+            ],
+          ),
         ),
         title: Row(
           children: [
@@ -434,9 +467,7 @@ class _FriendTile extends StatelessWidget {
             if (friend.lastMessage != null) ...[
               Text(
                 friend.lastMessage!,
-                style: TextStyle(
-                  color: cs.onSurface.withValues(alpha: 0.8),
-                ),
+                style: TextStyle(color: cs.onSurface.withValues(alpha: 0.8)),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -454,8 +485,12 @@ class _FriendTile extends StatelessWidget {
                 friend.isOnline ? 'ออนไลน์' : 'ออฟไลน์',
                 style: TextStyle(
                   fontSize: 12,
-                  color: friend.isOnline ? Colors.green : cs.onSurface.withValues(alpha: 0.5),
-                  fontWeight: friend.isOnline ? FontWeight.w500 : FontWeight.normal,
+                  color: friend.isOnline
+                      ? Colors.green
+                      : cs.onSurface.withValues(alpha: 0.5),
+                  fontWeight: friend.isOnline
+                      ? FontWeight.w500
+                      : FontWeight.normal,
                 ),
               ),
             ],
@@ -497,7 +532,7 @@ class _FriendTile extends StatelessWidget {
   String _formatTime(DateTime time) {
     final now = DateTime.now();
     final difference = now.difference(time);
-    
+
     if (difference.inMinutes < 1) {
       return 'เพิ่งกี้';
     } else if (difference.inHours < 1) {
@@ -516,7 +551,9 @@ class _FriendTile extends StatelessWidget {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('ลบเพื่อน'),
-        content: Text('คุณต้องการลบ ${friend.name} ออกจากรายชื่อเพื่อนหรือไม่?'),
+        content: Text(
+          'คุณต้องการลบ ${friend.name} ออกจากรายชื่อเพื่อนหรือไม่?',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
@@ -529,9 +566,10 @@ class _FriendTile extends StatelessWidget {
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                    content: Text(success 
-                      ? 'ลบเพื่อนเรียบร้อยแล้ว' 
-                      : 'เกิดข้อผิดพลาดในการลบเพื่อน'
+                    content: Text(
+                      success
+                          ? 'ลบเพื่อนเรียบร้อยแล้ว'
+                          : 'เกิดข้อผิดพลาดในการลบเพื่อน',
                     ),
                     backgroundColor: success ? Colors.green : Colors.red,
                   ),

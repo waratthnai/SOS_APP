@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:bluetooth_low_energy/bluetooth_low_energy.dart';
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'transport.dart';
@@ -377,7 +378,11 @@ class BleTransport implements Transport {
     if (buffer == null || meta == null) return;
     try {
       final dir  = await getApplicationDocumentsDirectory();
-      final name = (meta['name'] as String?) ?? 'ble_${DateTime.now().millisecondsSinceEpoch}';
+      // sanitize ชื่อไฟล์ที่ peer ส่งมา ป้องกัน path traversal (เช่น "../../databases/chat.db")
+      final rawName = (meta['name'] as String?) ?? 'ble_${DateTime.now().millisecondsSinceEpoch}';
+      final name = p.basename(rawName).isEmpty
+          ? 'ble_${DateTime.now().millisecondsSinceEpoch}'
+          : p.basename(rawName);
       final path = '${dir.path}/$name';
       await File(path).writeAsBytes(buffer);
       if (!_fileCtrl.isClosed) {

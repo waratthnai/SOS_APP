@@ -6,10 +6,18 @@ import 'logger.dart';
 
 /// End-to-End Encryption service using X25519 key agreement + AES-256-GCM.
 ///
-/// Protocol:
-///   Initiator → Responder : `E2E_HELLO:<base64_pubkey>`
-///   Responder → Initiator : `E2E_ACK:<base64_pubkey>`
+/// Protocol (X3DH-lite — gives forward secrecy on top of TOFU identity trust):
+///   Initiator → Responder : `E2E_HELLO:<identity_pub_b64>:<ephemeral_pub_b64>`
+///   Responder → Initiator : `E2E_ACK:<identity_pub_b64>:<ephemeral_pub_b64>`
 ///   After handshake       : `ENC:<base64_nonce>:<base64_ciphertext+mac>`
+///
+/// Each handshake generates a fresh, never-persisted ephemeral X25519 keypair.
+/// The session key is derived from 4 combined ECDH terms (identity×identity,
+/// ephemeral×ephemeral, and both identity×ephemeral cross terms) — mirroring
+/// the shape of Signal's X3DH. Because the ephemeral private keys are never
+/// written to disk and are discarded right after deriving the session key,
+/// compromising the long-term identity key later does NOT let an attacker
+/// recompute past session keys from captured traffic (forward secrecy).
 ///
 /// Session keys live in memory only — cleared on app restart.
 /// Private key seed is persisted in SharedPreferences so our public key
@@ -17,16 +25,28 @@ import 'logger.dart';
 class E2EEService {
   static const _prefKey = 'e2ee_seed_v1';
   static const _trustedKeyPrefix = 'e2ee_trusted_v1_';
+  static const _signPrefKey = 'e2ee_sign_seed_v1';
+  static const _trustedSignKeyPrefix = 'e2ee_trusted_sign_v1_';
 
   final _x25519 = X25519();
   final _aesGcm = AesGcm.with256bits();
   final _hkdf = Hkdf(hmac: Hmac.sha256(), outputLength: 32);
+  final _ed25519 = Ed25519();
 
   SimpleKeyPair? _myKeyPair;
+  SimpleKeyPair? _mySigningKeyPair;
   final Map<String, SecretKey> _sessionKeys = {};
   final Set<String> _initiated = {};
 
-  // Emits peerId when a peer reconnects with a different public key than stored.
+  // ephemeral keypair ที่เราสร้างไว้ตอนเป็น initiator (ส่ง HELLO) รอจนกว่า ACK จะกลับมา
+  // เพื่อใช้คำนวณ session key — ไม่ persist ที่ไหนเลย ทิ้งทันทีหลังใช้
+  final Map<String, SimpleKeyPair> _pendingEphemeralKeys = {};
+
+  // handshake ที่คีย์ประจำตัว (identity) ของ peer ไม่ตรงกับที่เคย trust ไว้ (TOFU mismatch)
+  // เก็บทุกอย่างที่ต้องใช้คำนวณ session key ไว้รอ user ยืนยันผ่าน acceptNewKey()
+  final Map<String, _PendingHandshake> _pendingUntrustedHandshakes = {};
+
+  // Emits peerId when a peer reconnects with a different identity key than stored.
   final _keyMismatchController = StreamController<String>.broadcast();
   Stream<String> get onKeyMismatch => _keyMismatchController.stream;
 
@@ -48,6 +68,18 @@ class E2EEService {
       await prefs.setString(_prefKey, base64Encode(seed));
       Log.d('[E2EE] Generated new keypair and saved seed');
     }
+
+    final storedSignSeed = prefs.getString(_signPrefKey);
+    if (storedSignSeed != null) {
+      final seed = base64Decode(storedSignSeed);
+      _mySigningKeyPair = await _ed25519.newKeyPairFromSeed(seed);
+      Log.d('[E2EE] Loaded existing signing keypair from prefs');
+    } else {
+      _mySigningKeyPair = await _ed25519.newKeyPair();
+      final seed = await _mySigningKeyPair!.extractPrivateKeyBytes();
+      await prefs.setString(_signPrefKey, base64Encode(seed));
+      Log.d('[E2EE] Generated new signing keypair and saved seed');
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -62,9 +94,16 @@ class E2EEService {
     if (_initiated.contains(peerId)) return;
     _initiated.add(peerId);
 
-    final pubBytes = await _pubKeyBytes();
-    await send('E2E_HELLO:${base64Encode(pubBytes)}');
-    Log.d('[E2EE] Sent HELLO to $peerId');
+    // ephemeral keypair สดใหม่ทุก handshake — คือหัวใจของ forward secrecy
+    final ephemeral = await _x25519.newKeyPair();
+    _pendingEphemeralKeys[peerId] = ephemeral;
+
+    final identityPubB64 = base64Encode(await _pubKeyBytes());
+    final ephemeralPubB64 = base64Encode(
+      (await ephemeral.extractPublicKey()).bytes,
+    );
+    await send('E2E_HELLO:$identityPubB64:$ephemeralPubB64');
+    Log.d('[E2EE] Sent HELLO (+ephemeral) to $peerId');
   }
 
   /// Process an incoming E2EE protocol message.
@@ -75,25 +114,86 @@ class E2EEService {
     Future<void> Function(String body) send,
   ) async {
     if (body.startsWith('E2E_HELLO:')) {
-      final keyB64 = body.substring('E2E_HELLO:'.length);
-      await _checkAndStoreTrustedKey(fromPeerId, keyB64);
-      final theirPubKey = _parsePublicKey(keyB64);
-      _sessionKeys[fromPeerId] = await _deriveKey(theirPubKey);
-      Log.d('[E2EE] Handshake HELLO from $fromPeerId — session established');
+      final parts = body.substring('E2E_HELLO:'.length).split(':');
+      if (parts.length < 2) return true; // malformed — บริโภคทิ้งเงียบๆ
+      final identityB64 = parts[0];
+      final ephemeralB64 = parts[1];
 
-      // Always respond with our public key so the initiator can derive the key too.
-      final pubBytes = await _pubKeyBytes();
-      await send('E2E_ACK:${base64Encode(pubBytes)}');
+      final trusted = await _checkAndStoreTrustedKey(fromPeerId, identityB64);
+
+      // เราเป็นฝั่ง responder — สร้าง ephemeral keypair ของเราเองสดใหม่ทุกครั้ง (ไม่ persist)
+      final myEphemeral = await _x25519.newKeyPair();
+
+      if (trusted) {
+        _sessionKeys[fromPeerId] = await _deriveSessionKeyX3DH(
+          myEphemeral: myEphemeral,
+          theirIdentity: _parsePublicKey(identityB64),
+          theirEphemeral: _parsePublicKey(ephemeralB64),
+        );
+        Log.d(
+          '[E2EE] Handshake HELLO from $fromPeerId — session established (forward-secret)',
+        );
+      } else {
+        _pendingUntrustedHandshakes[fromPeerId] = _PendingHandshake(
+          myEphemeral: myEphemeral,
+          theirIdentityB64: identityB64,
+          theirEphemeralB64: ephemeralB64,
+        );
+        Log.d(
+          '[E2EE] Handshake HELLO from $fromPeerId — key mismatch, session ค้างรอ user ยืนยัน',
+        );
+      }
+
+      // ตอบกลับด้วย identity + ephemeral ของเราเสมอ ไม่ว่า trust จะผ่านหรือไม่
+      // เพื่อให้ initiator รู้ pubkey ปัจจุบันของเรา
+      final myIdentityPubB64 = base64Encode(await _pubKeyBytes());
+      final myEphemeralPubB64 = base64Encode(
+        (await myEphemeral.extractPublicKey()).bytes,
+      );
+      await send('E2E_ACK:$myIdentityPubB64:$myEphemeralPubB64');
       return true;
     }
 
     if (body.startsWith('E2E_ACK:')) {
-      if (!_sessionKeys.containsKey(fromPeerId)) {
-        final keyB64 = body.substring('E2E_ACK:'.length);
-        await _checkAndStoreTrustedKey(fromPeerId, keyB64);
-        final theirPubKey = _parsePublicKey(keyB64);
-        _sessionKeys[fromPeerId] = await _deriveKey(theirPubKey);
-        Log.d('[E2EE] Handshake ACK from $fromPeerId — session established');
+      if (_sessionKeys.containsKey(fromPeerId)) {
+        _pendingEphemeralKeys.remove(
+          fromPeerId,
+        ); // ACK ซ้ำ/สาย — session มีอยู่แล้ว ทิ้ง ephemeral ที่ค้าง
+        return true;
+      }
+
+      final parts = body.substring('E2E_ACK:'.length).split(':');
+      if (parts.length < 2) return true;
+      final identityB64 = parts[0];
+      final ephemeralB64 = parts[1];
+
+      final myEphemeral = _pendingEphemeralKeys.remove(fromPeerId);
+      if (myEphemeral == null) {
+        Log.d(
+          '[E2EE] ได้รับ ACK จาก $fromPeerId แต่ไม่มี ephemeral ที่ค้างไว้ (ไม่ใช่ initiator ของ handshake นี้) — ข้าม',
+        );
+        return true;
+      }
+
+      final trusted = await _checkAndStoreTrustedKey(fromPeerId, identityB64);
+      if (trusted) {
+        _sessionKeys[fromPeerId] = await _deriveSessionKeyX3DH(
+          myEphemeral: myEphemeral,
+          theirIdentity: _parsePublicKey(identityB64),
+          theirEphemeral: _parsePublicKey(ephemeralB64),
+        );
+        Log.d(
+          '[E2EE] Handshake ACK from $fromPeerId — session established (forward-secret)',
+        );
+      } else {
+        _pendingUntrustedHandshakes[fromPeerId] = _PendingHandshake(
+          myEphemeral: myEphemeral,
+          theirIdentityB64: identityB64,
+          theirEphemeralB64: ephemeralB64,
+        );
+        Log.d(
+          '[E2EE] Handshake ACK from $fromPeerId — key mismatch, session ค้างรอ user ยืนยัน',
+        );
       }
       return true;
     }
@@ -101,7 +201,102 @@ class E2EEService {
     return false;
   }
 
+  /// เรียกเมื่อ user ยืนยันยอมรับคีย์ใหม่ของ peer ที่ mismatch (หลังเห็น banner แล้วกดยืนยัน)
+  /// อัปเดต trusted key ใน storage และ derive session key (forward-secret) ใหม่ให้ใช้งานได้
+  Future<void> acceptNewKey(String peerId) async {
+    final pending = _pendingUntrustedHandshakes.remove(peerId);
+    if (pending == null) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      '$_trustedKeyPrefix$peerId',
+      pending.theirIdentityB64,
+    );
+
+    _sessionKeys[peerId] = await _deriveSessionKeyX3DH(
+      myEphemeral: pending.myEphemeral,
+      theirIdentity: _parsePublicKey(pending.theirIdentityB64),
+      theirEphemeral: _parsePublicKey(pending.theirEphemeralB64),
+    );
+    Log.d(
+      '[E2EE] User ยืนยันรับคีย์ใหม่ของ $peerId แล้ว — session อัปเดต (forward-secret)',
+    );
+  }
+
+  /// เรียกเมื่อ user ปฏิเสธ/ปิด banner โดยไม่ยืนยันคีย์ใหม่ — ทิ้งคีย์ที่ค้างไว้
+  /// session เดิม (ถ้ามี) จะยังใช้งานได้ต่อ ไม่ถูกแตะต้อง
+  void rejectNewKey(String peerId) {
+    _pendingUntrustedHandshakes.remove(peerId);
+  }
+
   bool hasSession(String peerId) => _sessionKeys.containsKey(peerId);
+
+  // ---------------------------------------------------------------------------
+  // Mesh routing message signing (Ed25519) — ป้องกัน route/identity spoofing
+  // ---------------------------------------------------------------------------
+
+  /// Public key (base64) สำหรับใส่ในข้อความ mesh ที่เราเป็นผู้สร้าง (originator)
+  Future<String> meshSigningPubKeyB64() async {
+    final pub = await _mySigningKeyPair!.extractPublicKey();
+    return base64Encode(pub.bytes);
+  }
+
+  /// เซ็น [canonicalData] ด้วยคีย์เซ็นของเราเอง คืนค่า signature แบบ base64
+  Future<String> signMeshMessage(String canonicalData) async {
+    final sig = await _ed25519.sign(
+      utf8.encode(canonicalData),
+      keyPair: _mySigningKeyPair!,
+    );
+    return base64Encode(sig.bytes);
+  }
+
+  /// ตรวจสอบข้อความ mesh ที่อ้างว่ามาจาก [fromDeviceId]:
+  /// 1. TOFU-bind public key เข้ากับ deviceId ครั้งแรกที่เจอ
+  /// 2. ถ้า deviceId เดิมส่ง public key อื่นมา (ปลอมตัว) → ปฏิเสธทันที
+  /// 3. ตรวจลายเซ็นต่อ [canonicalData] จริงด้วย public key ที่ trust ไว้
+  Future<bool> verifyMeshMessage(
+    String fromDeviceId,
+    String canonicalData,
+    String? pubKeyB64,
+    String? sigB64,
+  ) async {
+    if (pubKeyB64 == null ||
+        sigB64 == null ||
+        pubKeyB64.isEmpty ||
+        sigB64.isEmpty) {
+      return false;
+    }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final storedPubKeyB64 = prefs.getString(
+        '$_trustedSignKeyPrefix$fromDeviceId',
+      );
+
+      if (storedPubKeyB64 == null) {
+        await prefs.setString('$_trustedSignKeyPrefix$fromDeviceId', pubKeyB64);
+      } else if (storedPubKeyB64 != pubKeyB64) {
+        Log.d(
+          '[E2EE] ❌ Mesh signing key mismatch สำหรับ $fromDeviceId — ปฏิเสธข้อความ (อาจถูกปลอมตัว)',
+        );
+        return false;
+      }
+
+      final signature = Signature(
+        base64Decode(sigB64),
+        publicKey: SimplePublicKey(
+          base64Decode(pubKeyB64),
+          type: KeyPairType.ed25519,
+        ),
+      );
+      return await _ed25519.verify(
+        utf8.encode(canonicalData),
+        signature: signature,
+      );
+    } catch (e) {
+      Log.d('[E2EE] Mesh signature verify error: $e');
+      return false;
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // Encrypt / Decrypt
@@ -167,12 +362,16 @@ class E2EEService {
   void clearSession(String peerId) {
     _sessionKeys.remove(peerId);
     _initiated.remove(peerId);
+    _pendingEphemeralKeys.remove(peerId);
+    _pendingUntrustedHandshakes.remove(peerId);
     Log.d('[E2EE] Cleared session for $peerId');
   }
 
   void dispose() {
     _sessionKeys.clear();
     _initiated.clear();
+    _pendingEphemeralKeys.clear();
+    _pendingUntrustedHandshakes.clear();
     _keyMismatchController.close();
   }
 
@@ -180,21 +379,33 @@ class E2EEService {
   // Private helpers
   // ---------------------------------------------------------------------------
 
-  /// TOFU: on first contact store the key; on re-contact emit mismatch if key changed.
-  Future<void> _checkAndStoreTrustedKey(String peerId, String incomingB64) async {
+  /// TOFU: on first contact store the identity key (trusted). On re-contact
+  /// with a different identity key, emit a mismatch event — caller is
+  /// responsible for stashing the pending handshake and NOT deriving/
+  /// overwriting the session key until the user calls [acceptNewKey].
+  /// Returns true if the incoming key is trusted (safe to derive a session key).
+  Future<bool> _checkAndStoreTrustedKey(
+    String peerId,
+    String incomingB64,
+  ) async {
     final prefs = await SharedPreferences.getInstance();
     final storedB64 = prefs.getString('$_trustedKeyPrefix$peerId');
 
     if (storedB64 == null) {
       await prefs.setString('$_trustedKeyPrefix$peerId', incomingB64);
       Log.d('[E2EE] TOFU: stored trusted key for $peerId');
-      return;
+      return true;
     }
 
     if (storedB64 != incomingB64) {
-      Log.d('[E2EE] ⚠️ Key mismatch for $peerId — key changed since last session');
+      Log.d(
+        '[E2EE] ⚠️ Key mismatch for $peerId — key changed since last session',
+      );
       _keyMismatchController.add(peerId);
+      return false;
     }
+
+    return true;
   }
 
   Future<List<int>> _pubKeyBytes() async {
@@ -206,15 +417,71 @@ class E2EEService {
     return SimplePublicKey(base64Decode(b64), type: KeyPairType.x25519);
   }
 
-  Future<SecretKey> _deriveKey(SimplePublicKey theirPublicKey) async {
-    final shared = await _x25519.sharedSecretKey(
-      keyPair: _myKeyPair!,
-      remotePublicKey: theirPublicKey,
+  /// X3DH-lite: รวม ECDH 4 เทอม (identity×identity, ephemeral×ephemeral,
+  /// และ cross term ทั้งสองทาง) เป็น key material เดียวก่อนเข้า HKDF
+  /// cross term ทั้งสองต้องเรียง byte order ให้เหมือนกันทั้งสองฝั่ง (ไม่งั้น initiator
+  /// กับ responder จะคำนวณ session key ไม่ตรงกัน เพราะแต่ละฝั่งได้ค่าเดียวกันแต่คนละเทอม)
+  Future<SecretKey> _deriveSessionKeyX3DH({
+    required SimpleKeyPair myEphemeral,
+    required SimplePublicKey theirIdentity,
+    required SimplePublicKey theirEphemeral,
+  }) async {
+    final myIdentity = _myKeyPair!;
+
+    final identityIdentity = await _x25519.sharedSecretKey(
+      keyPair: myIdentity,
+      remotePublicKey: theirIdentity,
     );
+    final ephemeralEphemeral = await _x25519.sharedSecretKey(
+      keyPair: myEphemeral,
+      remotePublicKey: theirEphemeral,
+    );
+    final crossA = await _x25519.sharedSecretKey(
+      keyPair: myIdentity,
+      remotePublicKey: theirEphemeral,
+    );
+    final crossB = await _x25519.sharedSecretKey(
+      keyPair: myEphemeral,
+      remotePublicKey: theirIdentity,
+    );
+
+    final iiBytes = await identityIdentity.extractBytes();
+    final eeBytes = await ephemeralEphemeral.extractBytes();
+    final crossABytes = await crossA.extractBytes();
+    final crossBBytes = await crossB.extractBytes();
+
+    final crossSorted = _compareBytes(crossABytes, crossBBytes) <= 0
+        ? [...crossABytes, ...crossBBytes]
+        : [...crossBBytes, ...crossABytes];
+
+    final combined = SecretKeyData([...iiBytes, ...eeBytes, ...crossSorted]);
+
     return _hkdf.deriveKey(
-      secretKey: shared,
-      nonce: utf8.encode('offgrid-sos-v1'),
+      secretKey: combined,
+      nonce: utf8.encode('offgrid-sos-v2-x3dh'),
       info: utf8.encode('chat-e2ee'),
     );
   }
+
+  int _compareBytes(List<int> a, List<int> b) {
+    final len = a.length < b.length ? a.length : b.length;
+    for (var i = 0; i < len; i++) {
+      if (a[i] != b[i]) return a[i] - b[i];
+    }
+    return a.length - b.length;
+  }
+}
+
+/// handshake ที่ identity key ของ peer ไม่ตรงกับที่ trust ไว้ — เก็บทุกอย่างที่ต้องใช้
+/// derive session key รอ user ยืนยันผ่าน [E2EEService.acceptNewKey]
+class _PendingHandshake {
+  final SimpleKeyPair myEphemeral;
+  final String theirIdentityB64;
+  final String theirEphemeralB64;
+
+  _PendingHandshake({
+    required this.myEphemeral,
+    required this.theirIdentityB64,
+    required this.theirEphemeralB64,
+  });
 }

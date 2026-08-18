@@ -42,7 +42,6 @@ class ChatHistoryScreen extends StatefulWidget {
 
 class _ChatHistoryScreenState extends State<ChatHistoryScreen> {
   List<ChatRoom> _chatRooms = [];
-  List<ChatMessage> _allMessages = [];
   bool _isLoading = true;
   int _lastMessageCount = -1;
 
@@ -75,7 +74,6 @@ class _ChatHistoryScreenState extends State<ChatHistoryScreen> {
       if (mounted) {
         setState(() {
           _chatRooms = [];
-          _allMessages = [];
           _isLoading = false;
         });
       }
@@ -188,7 +186,6 @@ class _ChatHistoryScreenState extends State<ChatHistoryScreen> {
 
       setState(() {
         _chatRooms = rooms;
-        _allMessages = messages;
         _isLoading = false;
       });
     } catch (e) {
@@ -312,81 +309,6 @@ class _ChatHistoryScreenState extends State<ChatHistoryScreen> {
       case MessageStatus.synced:
         return Icons.cloud_done;
     }
-  }
-
-  Widget _buildSummaryCard(ColorScheme cs) {
-    // ใช้ _allMessages ที่โหลดพร้อมกับ rooms — ไม่ต้อง query DB ซ้ำ
-    final pendingCount = _allMessages.where((m) => m.status == MessageStatus.pending).length;
-    final sentCount = _allMessages.where((m) => m.status == MessageStatus.sent).length;
-    final syncedCount = _allMessages.where((m) => m.status == MessageStatus.synced).length;
-    final emergencyCount = _allMessages.where((m) => m.isEmergency).length;
-
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Card(
-        elevation: 2,
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'สถานะข้อความ',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: cs.primary,
-                ),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: _StatCard(
-                      icon: Icons.schedule,
-                      label: 'รอส่ง',
-                      value: '$pendingCount',
-                      color: Colors.orange,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _StatCard(
-                      icon: Icons.check,
-                      label: 'ส่งแล้ว',
-                      value: '$sentCount',
-                      color: Colors.blue,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: _StatCard(
-                      icon: Icons.cloud_done,
-                      label: 'ซิงก์แล้ว',
-                      value: '$syncedCount',
-                      color: Colors.green,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _StatCard(
-                      icon: Icons.warning_amber,
-                      label: 'ฉุกเฉิน',
-                      value: '$emergencyCount',
-                      color: Colors.red,
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 
   @override
@@ -583,53 +505,3 @@ class _ChatHistoryScreenState extends State<ChatHistoryScreen> {
   }
 }
 
-class _StatCard extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String value;
-  final Color color;
-
-  const _StatCard({
-    required this.icon,
-    required this.label,
-    required this.value,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: color.withValues(alpha: 0.3),
-          width: 1,
-        ),
-      ),
-      child: Column(
-        children: [
-          Icon(icon, color: color, size: 24),
-          const SizedBox(height: 4),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
-          ),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 11,
-              color: color.withValues(alpha: 0.8),
-            ),
-            textAlign: TextAlign.center,
-          ),
-        ],
-      ),
-    );
-  }
-}

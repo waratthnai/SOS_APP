@@ -17,14 +17,28 @@ exports.sendFriendMessageNotification = onDocumentCreated(
     if (!snap) return;
     const data = snap.data();
 
-    const toToken = data.toToken;
-    const senderName = data.senderName || "เพื่อน";
     const message = data.message || "";
     const fromUserId = data.fromUserId || "";
+    const toUserId = data.to || "";
     const type = data.type || "friend_message";
 
+    if (!toUserId || !fromUserId) {
+      logger.warn("ไม่มี to/fromUserId ใน notification doc, ข้าม", { id: event.params.notificationId });
+      return;
+    }
+
+    // ดึง fcmToken ของผู้รับ และชื่อผู้ส่งจาก Firestore เอง (ผ่าน admin SDK)
+    // แทนที่จะเชื่อ toToken/senderName ที่ client ส่งมา ป้องกันการปลอมแจ้งเตือน
+    const [toDoc, fromDoc] = await Promise.all([
+      admin.firestore().collection("users").doc(toUserId).get(),
+      admin.firestore().collection("users").doc(fromUserId).get(),
+    ]);
+
+    const toToken = toDoc.data()?.fcmToken;
+    const senderName = fromDoc.data()?.name || "เพื่อน";
+
     if (!toToken) {
-      logger.warn("ไม่มี toToken ใน notification doc, ข้าม", { id: event.params.notificationId });
+      logger.warn("ผู้รับไม่มี fcmToken, ข้าม", { id: event.params.notificationId });
       return;
     }
 

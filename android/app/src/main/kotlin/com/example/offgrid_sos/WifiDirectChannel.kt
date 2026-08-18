@@ -417,7 +417,9 @@ class WifiDirectChannel(private val activity: Activity) {
                     FRAME_FILE_META -> {
                         try {
                             val meta = JSONObject(String(payload, Charsets.UTF_8))
-                            val name = meta.getString("name")
+                            // sanitize ชื่อไฟล์ที่ peer ส่งมา ป้องกัน path traversal (เช่น "../../shared_prefs/x.xml")
+                            val rawName = meta.getString("name")
+                            val name = File(rawName).name.ifEmpty { "received_file" }
                             val size = meta.getLong("size")
                             val dir = File(activity.cacheDir, "wifi_direct_received")
                             if (!dir.exists()) dir.mkdirs()

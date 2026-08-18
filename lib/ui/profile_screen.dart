@@ -1,6 +1,7 @@
 // lib/ui/profile_screen.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 import '../core/friend_service.dart';
 import '../cloud/firebase_service.dart';
 
@@ -15,6 +16,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   final _nameController = TextEditingController();
   final _bioController = TextEditingController();
   bool _isLoading = false;
+  bool _isUploadingAvatar = false;
 
   @override
   void initState() {
@@ -43,9 +45,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     final name = _nameController.text.trim();
     if (name.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('กรุณาใส่ชื่อ')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('กรุณาใส่ชื่อ')));
       return;
     }
 
@@ -54,7 +56,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
     try {
       final updatedProfile = currentUser.copyWith(
         name: name,
-        bio: _bioController.text.trim().isEmpty ? null : _bioController.text.trim(),
+        bio: _bioController.text.trim().isEmpty
+            ? null
+            : _bioController.text.trim(),
         lastActiveAt: DateTime.now(),
       );
 
@@ -68,9 +72,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('เกิดข้อผิดพลาด: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('เกิดข้อผิดพลาด: $e')));
       }
     } finally {
       if (mounted) {
@@ -79,11 +83,87 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
+  /// เปิดเมนูเลือกถ่ายรูป/เลือกจากคลัง แล้วอัปโหลดขึ้น Firebase Storage เป็นรูปโปรไฟล์
+  Future<void> _pickAndUploadAvatar() async {
+    if (!firebaseService.isOnline || !firebaseService.isSignedIn) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'ต้องออนไลน์และเข้าสู่ระบบก่อนถึงจะเปลี่ยนรูปโปรไฟล์ได้',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_camera),
+              title: const Text('ถ่ายรูป'),
+              onTap: () => Navigator.pop(ctx, ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library),
+              title: const Text('เลือกจากคลัง'),
+              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null || !mounted) return;
+
+    final picked = await ImagePicker().pickImage(
+      source: source,
+      maxWidth: 800,
+      imageQuality: 85,
+    );
+    if (picked == null || !mounted) return;
+
+    final currentUser = friendService.currentUser;
+    if (currentUser == null) return;
+
+    setState(() => _isUploadingAvatar = true);
+    try {
+      final ext = picked.path.split('.').last;
+      final storagePath = 'avatars/${currentUser.id}.$ext';
+      final url = await firebaseService.uploadFile(picked.path, storagePath);
+      if (url == null) throw Exception('อัปโหลดรูปไม่สำเร็จ');
+
+      final updatedProfile = currentUser.copyWith(
+        avatar: url,
+        lastActiveAt: DateTime.now(),
+      );
+      await friendService.updateUserProfile(updatedProfile);
+
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('อัปเดตรูปโปรไฟล์แล้ว')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('เกิดข้อผิดพลาด: $e')));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isUploadingAvatar = false);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('โปรไฟล์'),
@@ -100,10 +180,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ),
             )
           else
-            TextButton(
-              onPressed: _updateProfile,
-              child: const Text('บันทึก'),
-            ),
+            TextButton(onPressed: _updateProfile, child: const Text('บันทึก')),
         ],
       ),
       body: AnimatedBuilder(
@@ -129,17 +206,25 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     if (isSignedIn) {
                       return Container(
                         margin: const EdgeInsets.only(bottom: 8),
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 10,
+                        ),
                         decoration: BoxDecoration(
                           color: const Color(0xFF1B3A2A),
                           borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: const Color(0xFF2E7D4F), width: 1),
+                          border: Border.all(
+                            color: const Color(0xFF2E7D4F),
+                            width: 1,
+                          ),
                         ),
                         child: Row(
                           children: [
                             Icon(
                               isOnline ? Icons.cloud_done : Icons.cloud_off,
-                              color: isOnline ? const Color(0xFF43A047) : const Color(0xFF8A9BC2),
+                              color: isOnline
+                                  ? const Color(0xFF43A047)
+                                  : const Color(0xFF8A9BC2),
                               size: 20,
                             ),
                             const SizedBox(width: 10),
@@ -148,7 +233,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    isOnline ? 'เชื่อมต่อ Cloud แล้ว' : 'login อยู่ (ออฟไลน์)',
+                                    isOnline
+                                        ? 'เชื่อมต่อ Cloud แล้ว'
+                                        : 'login อยู่ (ออฟไลน์)',
                                     style: const TextStyle(
                                       color: Color(0xFF43A047),
                                       fontWeight: FontWeight.w600,
@@ -158,7 +245,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                   if (email != null)
                                     Text(
                                       email,
-                                      style: const TextStyle(color: Color(0xFF8A9BC2), fontSize: 11),
+                                      style: const TextStyle(
+                                        color: Color(0xFF8A9BC2),
+                                        fontSize: 11,
+                                      ),
                                     ),
                                 ],
                               ),
@@ -171,20 +261,33 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     // ยังไม่ได้ login → แสดง soft prompt
                     return Container(
                       margin: const EdgeInsets.only(bottom: 8),
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 12,
+                      ),
                       decoration: BoxDecoration(
                         color: const Color(0xFF1E2A40),
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: const Color(0xFF2E3D5A), width: 1),
+                        border: Border.all(
+                          color: const Color(0xFF2E3D5A),
+                          width: 1,
+                        ),
                       ),
                       child: Row(
                         children: [
-                          const Icon(Icons.cloud_off, color: Color(0xFF6A7A9A), size: 20),
+                          const Icon(
+                            Icons.cloud_off,
+                            color: Color(0xFF6A7A9A),
+                            size: 20,
+                          ),
                           const SizedBox(width: 10),
                           const Expanded(
                             child: Text(
                               'เข้าสู่ระบบเพื่อ sync กับเพื่อนและสำรองข้อมูลบน Cloud\nใช้งานออฟไลน์ได้โดยไม่ต้อง login',
-                              style: TextStyle(color: Color(0xFF8A9BC2), fontSize: 12),
+                              style: TextStyle(
+                                color: Color(0xFF8A9BC2),
+                                fontSize: 12,
+                              ),
                             ),
                           ),
                           const SizedBox(width: 8),
@@ -194,16 +297,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               Navigator.pop(context);
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(
-                                  content: Text('ไปที่แท็บ "การตั้งค่า" เพื่อเข้าสู่ระบบ'),
+                                  content: Text(
+                                    'ไปที่แท็บ "การตั้งค่า" เพื่อเข้าสู่ระบบ',
+                                  ),
                                   duration: Duration(seconds: 3),
                                 ),
                               );
                             },
                             style: TextButton.styleFrom(
                               foregroundColor: const Color(0xFF1A90FF),
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 6,
+                              ),
                             ),
-                            child: const Text('Login', style: TextStyle(fontSize: 13)),
+                            child: const Text(
+                              'Login',
+                              style: TextStyle(fontSize: 13),
+                            ),
                           ),
                         ],
                       ),
@@ -219,18 +330,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       CircleAvatar(
                         radius: 60,
                         backgroundColor: cs.primaryContainer,
-                        backgroundImage: currentUser.avatar != null 
-                          ? NetworkImage(currentUser.avatar!) 
-                          : null,
-                        child: currentUser.avatar == null 
-                          ? Text(
-                              currentUser.name.isNotEmpty ? currentUser.name[0].toUpperCase() : '?',
-                              style: theme.textTheme.displayMedium?.copyWith(
-                                color: cs.onPrimaryContainer,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            )
-                          : null,
+                        backgroundImage: currentUser.avatar != null
+                            ? NetworkImage(currentUser.avatar!)
+                            : null,
+                        child: currentUser.avatar == null
+                            ? Text(
+                                currentUser.name.isNotEmpty
+                                    ? currentUser.name[0].toUpperCase()
+                                    : '?',
+                                style: theme.textTheme.displayMedium?.copyWith(
+                                  color: cs.onPrimaryContainer,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              )
+                            : null,
                       ),
                       Positioned(
                         bottom: 0,
@@ -241,22 +354,34 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             borderRadius: BorderRadius.circular(20),
                             border: Border.all(color: cs.surface, width: 2),
                           ),
-                          child: IconButton(
-                            icon: Icon(Icons.camera_alt, color: cs.onPrimary, size: 20),
-                            onPressed: () {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('ฟีเจอร์นี้จะพัฒนาในเวอร์ชันต่อไป')),
-                              );
-                            },
-                          ),
+                          child: _isUploadingAvatar
+                              ? Padding(
+                                  padding: const EdgeInsets.all(10),
+                                  child: SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: cs.onPrimary,
+                                    ),
+                                  ),
+                                )
+                              : IconButton(
+                                  icon: Icon(
+                                    Icons.camera_alt,
+                                    color: cs.onPrimary,
+                                    size: 20,
+                                  ),
+                                  onPressed: _pickAndUploadAvatar,
+                                ),
                         ),
                       ),
                     ],
                   ),
                 ),
-                
+
                 const SizedBox(height: 32),
-                
+
                 // User ID Card
                 Card(
                   child: Padding(
@@ -275,7 +400,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           children: [
                             Expanded(
                               child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 12,
+                                ),
                                 decoration: BoxDecoration(
                                   color: cs.surfaceContainerHighest,
                                   borderRadius: BorderRadius.circular(8),
@@ -293,9 +421,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             IconButton(
                               icon: const Icon(Icons.copy),
                               onPressed: () {
-                                Clipboard.setData(ClipboardData(text: currentUser.id));
+                                Clipboard.setData(
+                                  ClipboardData(text: currentUser.id),
+                                );
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('คัดลอก ID แล้ว')),
+                                  const SnackBar(
+                                    content: Text('คัดลอก ID แล้ว'),
+                                  ),
                                 );
                               },
                             ),
@@ -312,9 +444,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                   ),
                 ),
-                
+
                 const SizedBox(height: 24),
-                
+
                 // Name Field
                 _buildTextField(
                   controller: _nameController,
@@ -322,9 +454,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   icon: Icons.person,
                   required: true,
                 ),
-                
+
                 const SizedBox(height: 16),
-                
+
                 // Bio Field
                 _buildTextField(
                   controller: _bioController,
@@ -333,9 +465,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   maxLines: 3,
                   maxLength: 200,
                 ),
-                
+
                 const SizedBox(height: 32),
-                
+
                 // Stats Card
                 Card(
                   child: Padding(
@@ -343,10 +475,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          'สถิติ',
-                          style: theme.textTheme.titleMedium,
-                        ),
+                        Text('สถิติ', style: theme.textTheme.titleMedium),
                         const SizedBox(height: 16),
                         Row(
                           children: [
@@ -383,9 +512,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                   ),
                 ),
-                
+
                 const SizedBox(height: 24),
-                
+
                 // Account Info
                 Card(
                   child: Padding(
@@ -393,20 +522,25 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          'ข้อมูลบัญชี',
-                          style: theme.textTheme.titleMedium,
-                        ),
+                        Text('ข้อมูลบัญชี', style: theme.textTheme.titleMedium),
                         const SizedBox(height: 16),
-                        _buildInfoRow(context, 'สร้างเมื่อ', _formatDate(currentUser.createdAt)),
-                        _buildInfoRow(context, 'เข้าใช้ล่าสุด', _formatDate(currentUser.lastActiveAt)),
+                        _buildInfoRow(
+                          context,
+                          'สร้างเมื่อ',
+                          _formatDate(currentUser.createdAt),
+                        ),
+                        _buildInfoRow(
+                          context,
+                          'เข้าใช้ล่าสุด',
+                          _formatDate(currentUser.lastActiveAt),
+                        ),
                         if (currentUser.email != null)
                           _buildInfoRow(context, 'อีเมล', currentUser.email!),
                       ],
                     ),
                   ),
                 ),
-                
+
                 const SizedBox(height: 32),
               ],
             ),
@@ -436,10 +570,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _buildStatItem(BuildContext context, String label, String value, IconData icon, Color iconColor) {
+  Widget _buildStatItem(
+    BuildContext context,
+    String label,
+    String value,
+    IconData icon,
+    Color iconColor,
+  ) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    
+
     return Column(
       children: [
         Container(
@@ -470,7 +610,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget _buildInfoRow(BuildContext context, String label, String value) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(

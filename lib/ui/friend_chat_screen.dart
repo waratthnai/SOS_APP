@@ -789,13 +789,13 @@ class _FriendChatScreenState extends State<FriendChatScreen> {
               Navigator.pop(context);
               try {
                 await appState.clearFriendChat(widget.friend.userId);
-                if (mounted) {
+                if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text('✅ ล้างประวัติแชทเรียบร้อย')),
                   );
                 }
               } catch (e) {
-                if (mounted) {
+                if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(content: Text('❌ ล้างแชทไม่สำเร็จ: $e')),
                   );

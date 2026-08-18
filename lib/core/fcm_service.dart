@@ -200,25 +200,12 @@ class FCMService extends ChangeNotifier {
         return;
       }
 
-      // ดึง FCM token ของเพื่อน
-      final friendDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(friendUserId)
-          .get();
-
-      final friendToken = friendDoc.data()?['fcmToken'] as String?;
-      if (friendToken == null) {
-        Log.d('🔔 [FCM] Friend has no FCM token, skipping notification');
-        return;
-      }
-
-      // บันทึก notification request ใน Firestore
-      // Cloud Function จะดึงไปส่ง FCM
+      // บันทึก notification request ใน Firestore — Cloud Function จะดึง
+      // fcmToken ของผู้รับและชื่อผู้ส่งเองจาก Firestore ผ่าน admin SDK
+      // (ไม่เชื่อ toToken/senderName ที่ client ส่งมา ป้องกันการปลอมแจ้งเตือน)
       await FirebaseFirestore.instance.collection('notifications').add({
         'to': friendUserId,
-        'toToken': friendToken,
         'fromUserId': currentUser.id,
-        'senderName': currentUser.name,
         'message': message,
         'type': type,
         'timestamp': FieldValue.serverTimestamp(),

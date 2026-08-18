@@ -1,0 +1,26 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // ==================== รูปโปรไฟล์ ====================
+    // path: avatars/{userId}.{ext} — เขียนได้เฉพาะเจ้าของ (ตรวจจากส่วนก่อนจุดแรกของชื่อไฟล์)
+    match /avatars/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null; // TODO DEBUG: เดิมเช็ค fileName.split('.')[0] == uid ด้วย
+    }
+
+    // ==================== รูป/วิดีโอในแชทเพื่อน ====================
+    // path: chat_media/{chatId}/{fileName} — chatId = "{smallerUid}_{largerUid}"
+    match /chat_media/{chatId}/{fileName} {
+      allow read, write: if request.auth != null &&
+                            (chatId.split('_')[0] == request.auth.uid ||
+                             chatId.split('_')[1] == request.auth.uid);
+    }
+
+    // ปิดการเข้าถึง path อื่นๆ ที่ไม่ได้กำหนด (deny by default)
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

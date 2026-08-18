@@ -343,7 +343,7 @@ class FriendService extends ChangeNotifier with WidgetsBindingObserver {
     await Future.wait(
       List.generate(_friends.length, (i) async {
         try {
-          final profile = await firebaseService.findUserByUserId(
+          final profile = await firebaseService.findPublicProfileByUserId(
             _friends[i].userId, forceRefresh: true);
           if (profile == null) return;
 
@@ -389,7 +389,7 @@ class FriendService extends ChangeNotifier with WidgetsBindingObserver {
       
       if (isUserId) {
         // ค้นหาจาก User ID โดยตรง
-        final user = await firebaseService.findUserByUserId(query);
+        final user = await firebaseService.findPublicProfileByUserId(query);
         if (user != null) {
           users = [user];
           Log.d('[FriendService] ✅ พบ 1 ผู้ใช้');

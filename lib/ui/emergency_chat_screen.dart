@@ -1,4 +1,4 @@
-﻿// lib/ui/emergency_chat_screen.dart
+// lib/ui/emergency_chat_screen.dart
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -15,12 +15,23 @@ import '../widgets/message_status_icon.dart';
 import 'package:offgrid_sos/core/logger.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-void _openFullScreenImage(BuildContext ctx, {required String heroTag, String? filePath, String? url}) {
-  Navigator.of(ctx).push(PageRouteBuilder(
-    opaque: false,
-    barrierColor: Colors.black,
-    pageBuilder: (_, __, ___) => _FullScreenImageViewer(heroTag: heroTag, filePath: filePath, url: url),
-  ));
+void _openFullScreenImage(
+  BuildContext ctx, {
+  required String heroTag,
+  String? filePath,
+  String? url,
+}) {
+  Navigator.of(ctx).push(
+    PageRouteBuilder(
+      opaque: false,
+      barrierColor: Colors.black,
+      pageBuilder: (_, __, ___) => _FullScreenImageViewer(
+        heroTag: heroTag,
+        filePath: filePath,
+        url: url,
+      ),
+    ),
+  );
 }
 
 /// หน้าแชทฉุกเฉินสำหรับอุปกรณ์ที่สแกนเจอ
@@ -42,7 +53,11 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
   bool _showSearchBar = false; // 🔍 สถานะแสดง/ซ่อนแถบค้นหา
   final _picker = ImagePicker();
   int _messageCount = 0; // ⚡ ติดตามจำนวนข้อความเพื่อ rebuild
-  String? _myDeviceId; // โหลดครั้งเดียวใน initState ไม่ต้อง query ซ้ำทุก rebuild
+  int _readCount =
+      0; // ⚡ ติดตามจำนวนข้อความที่อ่านแล้ว เพื่อ rebuild ตอน read receipt เข้ามา
+  // (count อย่างเดียวไม่พอ — read receipt แก้ isRead ของข้อความเดิม ไม่ได้เพิ่มจำนวนข้อความ)
+  String?
+  _myDeviceId; // โหลดครั้งเดียวใน initState ไม่ต้อง query ซ้ำทุก rebuild
 
   @override
   void initState() {
@@ -52,9 +67,8 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
     // ⚡ ฟังการเปลี่ยนแปลงของ chatMessages เพื่อ rebuild
     appState.addListener(_onMessagesChanged);
 
-    // ✅ ทำเครื่องหมายข้อความจาก peer นี้ว่าอ่านแล้ว
-    final userId = friendService.currentUser?.id ?? 'anonymous';
-    ChatDB.markConversationRead(userId, widget.peer.id);
+    // ✅ ทำเครื่องหมายข้อความจาก peer นี้ว่าอ่านแล้ว + ส่ง read receipt กลับไปถ้ายังเชื่อมต่ออยู่
+    appState.markPeerMessagesAsRead(widget.peer.id);
 
     // โหลด device ID ครั้งเดียว — ค่านี้ไม่เปลี่ยนระหว่าง session
     DeviceIdManager.getCurrentId().then((id) {
@@ -67,7 +81,9 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
 
   @override
   void dispose() {
-    appState.setActivePeerChat(null); // ออกจากห้องแชทแล้ว → เปิด notification ตามปกติ
+    appState.setActivePeerChat(
+      null,
+    ); // ออกจากห้องแชทแล้ว → เปิด notification ตามปกติ
     appState.removeListener(_onMessagesChanged);
     _messageController.dispose();
     _scrollController.dispose();
@@ -75,13 +91,18 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
     super.dispose();
   }
 
-  // ⚡ Callback เมื่อมีข้อความใหม่
+  // ⚡ Callback เมื่อมีข้อความใหม่ หรือสถานะ read receipt ของข้อความเดิมเปลี่ยน
   void _onMessagesChanged() {
     final newCount = appState.chatMessages.length;
-    if (newCount != _messageCount) {
-      setState(() {
-        _messageCount = newCount;
-      });
+    final newReadCount = appState.chatMessages.where((m) => m.isRead).length;
+    final hasNewMessage = newCount != _messageCount;
+    if (!hasNewMessage && newReadCount == _readCount) return;
+
+    setState(() {
+      _messageCount = newCount;
+      _readCount = newReadCount;
+    });
+    if (hasNewMessage) {
       _scrollToBottom();
     }
   }
@@ -104,7 +125,7 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
 
     // ตรวจสอบว่าเชื่อมต่อกับ peer หรือไม่
     final isConnected = appState.peers.any((p) => p.id == widget.peer.id);
-    
+
     if (!isConnected) {
       // ถ้าไม่ได้เชื่อมต่อ แสดงข้อความแจ้งเตือน
       if (mounted) {
@@ -132,12 +153,12 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
     }
 
     _messageController.clear();
-    
+
     // ส่งข้อความผ่าน sendChatText แทนที่จะใช้ send โดยตรง
     // เพื่อให้การเพิ่มข้อความและ notification ทำงานถูกต้อง
     // ข้อความจะถูกบันทึกเป็น 'pending' ถ้าไม่ได้เชื่อมต่อ
     appState.sendChatText(text, receiverId: widget.peer.id);
-    
+
     _scrollToBottom();
   }
 
@@ -158,22 +179,34 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
               ListTile(
                 leading: Icon(Icons.location_on, color: cs.primary),
                 title: const Text('ส่งตำแหน่งปัจจุบัน'),
-                onTap: () { Navigator.pop(ctx); _sendLocation(); },
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _sendLocation();
+                },
               ),
               ListTile(
                 leading: Icon(Icons.photo_camera, color: cs.primary),
                 title: const Text('ถ่ายรูป'),
-                onTap: () { Navigator.pop(ctx); _takePhoto(); },
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _takePhoto();
+                },
               ),
               ListTile(
                 leading: Icon(Icons.photo_library, color: cs.primary),
                 title: const Text('รูปจากคลัง'),
-                onTap: () { Navigator.pop(ctx); _pickImage(); },
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _pickImage();
+                },
               ),
               ListTile(
                 leading: Icon(Icons.video_library, color: cs.primary),
                 title: const Text('วิดีโอจากคลัง'),
-                onTap: () { Navigator.pop(ctx); _pickVideo(); },
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _pickVideo();
+                },
               ),
             ],
           ),
@@ -185,15 +218,22 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
   Future<void> _sendLocation() async {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('📍 กำลังรับตำแหน่ง...'), duration: Duration(seconds: 2)),
+      const SnackBar(
+        content: Text('📍 กำลังรับตำแหน่ง...'),
+        duration: Duration(seconds: 2),
+      ),
     );
     try {
       LocationPermission perm = await Geolocator.checkPermission();
       if (perm == LocationPermission.denied) {
         perm = await Geolocator.requestPermission();
-        if (perm == LocationPermission.denied) throw Exception('ไม่ได้รับสิทธิ์ตำแหน่ง');
+        if (perm == LocationPermission.denied) {
+          throw Exception('ไม่ได้รับสิทธิ์ตำแหน่ง');
+        }
       }
-      if (perm == LocationPermission.deniedForever) throw Exception('ปิดสิทธิ์ตำแหน่งถาวร');
+      if (perm == LocationPermission.deniedForever) {
+        throw Exception('ปิดสิทธิ์ตำแหน่งถาวร');
+      }
 
       final pos = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
@@ -202,22 +242,23 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
 
       final lat = pos.latitude.toStringAsFixed(6);
       final lng = pos.longitude.toStringAsFixed(6);
-      final url = 'https://www.google.com/maps?q=${pos.latitude},${pos.longitude}';
+      final url =
+          'https://www.google.com/maps?q=${pos.latitude},${pos.longitude}';
       final text = '📍 ตำแหน่งของฉัน\nละติจูด: $lat\nลองติจูด: $lng\n$url';
 
       appState.sendChatText(text, receiverId: widget.peer.id);
       _scrollToBottom();
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('✅ ส่งตำแหน่งสำเร็จ')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('✅ ส่งตำแหน่งสำเร็จ')));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('❌ ไม่สามารถรับตำแหน่งได้: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('❌ ไม่สามารถรับตำแหน่งได้: $e')));
       }
     }
   }
@@ -234,9 +275,9 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
       if (image != null && mounted) await _sendImage(File(image.path));
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('❌ ไม่สามารถถ่ายรูปได้: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('❌ ไม่สามารถถ่ายรูปได้: $e')));
       }
     }
   }
@@ -263,7 +304,9 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
   // 🎥 เลือกวิดีโอจาก Gallery
   Future<void> _pickVideo() async {
     try {
-      final XFile? videoFile = await _picker.pickVideo(source: ImageSource.gallery);
+      final XFile? videoFile = await _picker.pickVideo(
+        source: ImageSource.gallery,
+      );
       if (videoFile == null) return;
       await _sendVideo(File(videoFile.path));
     } catch (e) {
@@ -279,12 +322,14 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
   Future<void> _sendVideo(File videoFile) async {
     // ตรวจสอบการเชื่อมต่อ
     final isConnected = appState.peers.any((p) => p.id == widget.peer.id);
-    
+
     if (!isConnected) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('❌ ไม่สามารถส่งวิดีโอได้ เนื่องจากไม่ได้เชื่อมต่อกับ ${widget.peer.name}'),
+            content: Text(
+              '❌ ไม่สามารถส่งวิดีโอได้ เนื่องจากไม่ได้เชื่อมต่อกับ ${widget.peer.name}',
+            ),
             backgroundColor: Colors.red,
             duration: const Duration(seconds: 3),
           ),
@@ -292,13 +337,13 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
       }
       return;
     }
-    
+
     try {
       // แสดง loading
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('📤 กำลังส่งวิดีโอ...')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('📤 กำลังส่งวิดีโอ...')));
       }
 
       // 💾 บันทึกชื่อ peer ก่อนส่ง
@@ -308,23 +353,20 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
       appState.addChatVideo(videoFile.path, receiverId: widget.peer.id);
 
       // ส่งไฟล์ผ่าน transport layer
-      await appState.transport.sendFile(
-        videoFile.path,
-        to: widget.peer,
-      );
+      await appState.transport.sendFile(videoFile.path, to: widget.peer);
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('✅ ส่งวิดีโอสำเร็จ')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('✅ ส่งวิดีโอสำเร็จ')));
       }
 
       _scrollToBottom();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('❌ ส่งวิดีโอไม่สำเร็จ: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('❌ ส่งวิดีโอไม่สำเร็จ: $e')));
       }
     }
   }
@@ -333,12 +375,14 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
   Future<void> _sendImage(File imageFile) async {
     // ตรวจสอบการเชื่อมต่อ
     final isConnected = appState.peers.any((p) => p.id == widget.peer.id);
-    
+
     if (!isConnected) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('❌ ไม่สามารถส่งรูปภาพได้ เนื่องจากไม่ได้เชื่อมต่อกับ ${widget.peer.name}'),
+            content: Text(
+              '❌ ไม่สามารถส่งรูปภาพได้ เนื่องจากไม่ได้เชื่อมต่อกับ ${widget.peer.name}',
+            ),
             backgroundColor: Colors.red,
             duration: const Duration(seconds: 3),
           ),
@@ -346,12 +390,12 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
       }
       return;
     }
-    
+
     try {
       // ตรวจสอบขนาดไฟล์ก่อนส่ง
       final fileSize = await imageFile.length();
       Log.d('📊 ขนาดไฟล์รูปภาพ: ${(fileSize / 1024).toStringAsFixed(2)} KB');
-      
+
       // ถ้าไฟล์ใหญ่เกิน 5MB แสดง warning
       if (fileSize > 5 * 1024 * 1024) {
         if (mounted) {
@@ -363,12 +407,12 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
           );
         }
       }
-      
+
       // แสดง loading
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('📤 กำลังส่งรูปภาพ...')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('📤 กำลังส่งรูปภาพ...')));
       }
 
       // 💾 บันทึกชื่อ peer ก่อนส่ง
@@ -378,24 +422,21 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
       appState.addChatImage(imageFile.path, receiverId: widget.peer.id);
 
       // ส่งไฟล์ผ่าน transport layer
-      await appState.transport.sendFile(
-        imageFile.path,
-        to: widget.peer,
-      );
+      await appState.transport.sendFile(imageFile.path, to: widget.peer);
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('✅ ส่งรูปภาพสำเร็จ')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('✅ ส่งรูปภาพสำเร็จ')));
       }
 
       _scrollToBottom();
     } catch (e) {
       Log.d('❌ ส่งรูปภาพล้มเหลว: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('❌ ส่งรูปภาพไม่สำเร็จ: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('❌ ส่งรูปภาพไม่สำเร็จ: $e')));
       }
     }
   }
@@ -404,12 +445,12 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    
+
     // ตรวจสอบสถานะ SOS และ Rescue Mode ของ peer นี้
     // 🔧 ใช้ peer.name แทน peer.id เพื่อรองรับ mesh (ที่มีหลาย ID แต่ name เดียว)
     final isSOSActive = appState.isSOSPeer(widget.peer.name);
     final isRescueActive = appState.isRescuePeer(widget.peer.name);
-    
+
     return Scaffold(
       backgroundColor: cs.surface,
       appBar: AppBar(
@@ -420,19 +461,19 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
               children: [
                 CircleAvatar(
                   radius: 16,
-                  backgroundColor: isSOSActive 
+                  backgroundColor: isSOSActive
                       ? Colors.red.withValues(alpha: 0.2)
                       : isRescueActive
-                          ? Colors.blue.withValues(alpha: 0.2)
-                          : cs.surfaceContainerHighest,
+                      ? Colors.blue.withValues(alpha: 0.2)
+                      : cs.surfaceContainerHighest,
                   child: Icon(
                     Icons.phone_android,
                     size: 16,
-                    color: isSOSActive 
+                    color: isSOSActive
                         ? Colors.red
                         : isRescueActive
-                            ? Colors.blue
-                            : cs.onSurfaceVariant,
+                        ? Colors.blue
+                        : cs.onSurfaceVariant,
                   ),
                 ),
                 // Badge สำหรับ SOS (สีแดง)
@@ -476,7 +517,9 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
                     children: [
                       Flexible(
                         child: Text(
-                          widget.peer.name.isNotEmpty ? widget.peer.name : 'อุปกรณ์ฉุกเฉิน',
+                          widget.peer.name.isNotEmpty
+                              ? widget.peer.name
+                              : 'อุปกรณ์ฉุกเฉิน',
                           style: const TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.bold,
@@ -502,64 +545,62 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
                       Icon(
                         Icons.circle,
                         size: 8,
-                        color: appState.peers.any((p) => p.id == widget.peer.id) 
-                            ? Colors.green 
+                        color: appState.peers.any((p) => p.id == widget.peer.id)
+                            ? Colors.green
                             : Colors.grey,
                       ),
                       const SizedBox(width: 4),
                       Text(
                         appState.peers.any((p) => p.id == widget.peer.id)
-                            ? (isSOSActive 
-                                ? 'ขอความช่วยเหลือ!'
-                                : isRescueActive
-                                    ? 'หน่วยกู้ภัย'
-                                    : 'เชื่อมต่อแล้ว')
+                            ? (isSOSActive
+                                  ? 'ขอความช่วยเหลือ!'
+                                  : isRescueActive
+                                  ? 'หน่วยกู้ภัย'
+                                  : 'เชื่อมต่อแล้ว')
                             : 'ไม่ได้เชื่อมต่อ',
                         style: TextStyle(
                           fontSize: 12,
-                          color: appState.peers.any((p) => p.id == widget.peer.id)
-                              ? (isSOSActive 
-                                  ? Colors.red
-                                  : isRescueActive
-                                      ? Colors.blue
-                                      : Colors.green)
+                          color:
+                              appState.peers.any((p) => p.id == widget.peer.id)
+                              ? (isSOSActive
+                                    ? Colors.red
+                                    : isRescueActive
+                                    ? Colors.blue
+                                    : Colors.green)
                               : Colors.grey,
-                          fontWeight: isSOSActive ? FontWeight.bold : FontWeight.normal,
+                          fontWeight: isSOSActive
+                              ? FontWeight.bold
+                              : FontWeight.normal,
                         ),
                       ),
-                      // 📍 แสดงระยะห่าง
-                      StreamBuilder<Position>(
-                        stream: Geolocator.getPositionStream(
-                          locationSettings: const LocationSettings(
-                            accuracy: LocationAccuracy.high,
-                            distanceFilter: 1,
-                          ),
-                        ),
-                        builder: (context, snapshot) {
-                          if (!snapshot.hasData) return const SizedBox.shrink();
-                          
+                      // 📍 แสดงระยะห่าง — ใช้ตำแหน่งจาก GPS stream กลางของ AppState
+                      // (เดิมเปิด Geolocator.getPositionStream ซ้อนตัวใหม่ทุกครั้งที่ rebuild
+                      // สิ้นเปลืองแบตซ้ำซ้อนกับ stream หลักที่ AppState รันอยู่แล้ว)
+                      Builder(
+                        builder: (context) {
                           final distance = appState.getDistanceToPeerSync(
-                            widget.peer.id, 
-                            snapshot.data,
+                            widget.peer.id,
+                            appState.myCurrentPosition,
                           );
-                          
+
                           if (distance == null) return const SizedBox.shrink();
-                          
+
                           String distanceText;
                           Color distanceColor;
-                          
+
                           if (distance < 1000) {
                             distanceText = '${distance.toStringAsFixed(0)} m';
-                            distanceColor = distance < 10 
-                                ? Colors.green 
-                                : distance < 50 
-                                    ? Colors.orange 
-                                    : Colors.grey;
+                            distanceColor = distance < 10
+                                ? Colors.green
+                                : distance < 50
+                                ? Colors.orange
+                                : Colors.grey;
                           } else {
-                            distanceText = '${(distance / 1000).toStringAsFixed(2)} km';
+                            distanceText =
+                                '${(distance / 1000).toStringAsFixed(2)} km';
                             distanceColor = Colors.grey;
                           }
-                          
+
                           return Row(
                             children: [
                               const SizedBox(width: 8),
@@ -617,7 +658,11 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.warning_amber_rounded, color: Colors.red, size: 14),
+                  Icon(
+                    Icons.warning_amber_rounded,
+                    color: Colors.red,
+                    size: 14,
+                  ),
                   const SizedBox(width: 4),
                   Text(
                     'SOS',
@@ -664,13 +709,15 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
 
           // TOFU key-mismatch warning
           if (appState.hasKeyMismatch(widget.peer.id))
-            _KeyMismatchBanner(peerName: widget.peer.name),
+            _KeyMismatchBanner(
+              peerName: widget.peer.name,
+              onAccept: () => appState.acceptPeerKeyChange(widget.peer.id),
+              onDismiss: () => appState.dismissPeerKeyMismatch(widget.peer.id),
+            ),
 
           // Messages area
-          Expanded(
-            child: _buildMessagesList(),
-          ),
-          
+          Expanded(child: _buildMessagesList()),
+
           // Input area
           _buildInputArea(),
         ],
@@ -680,12 +727,12 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
 
   Widget _buildSearchBar() {
     final cs = Theme.of(context).colorScheme;
-    
+
     // ซ่อนแถบค้นหาถ้า _showSearchBar เป็น false
     if (!_showSearchBar) {
       return const SizedBox.shrink();
     }
-    
+
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -699,10 +746,16 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
         decoration: InputDecoration(
           hintText: 'ค้นหาข้อความ...',
           hintStyle: TextStyle(color: cs.onSurface.withValues(alpha: 0.5)),
-          prefixIcon: Icon(Icons.search, color: cs.onSurface.withValues(alpha: 0.5)),
+          prefixIcon: Icon(
+            Icons.search,
+            color: cs.onSurface.withValues(alpha: 0.5),
+          ),
           suffixIcon: _searchQuery.isNotEmpty
               ? IconButton(
-                  icon: Icon(Icons.clear, color: cs.onSurface.withValues(alpha: 0.5)),
+                  icon: Icon(
+                    Icons.clear,
+                    color: cs.onSurface.withValues(alpha: 0.5),
+                  ),
                   onPressed: () {
                     setState(() {
                       _searchController.clear();
@@ -744,14 +797,14 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
       animation: appState,
       builder: (context, _) {
         final allMessages = appState.chatMessages.where((msg) {
-          final isFromMe = msg.from == myDeviceId ||
-                           msg.from == userId ||
-                           msg.from == 'me';
+          final isFromMe =
+              msg.from == myDeviceId || msg.from == userId || msg.from == 'me';
           final isFromPeer = msg.from == widget.peer.id;
           final isToPeer = msg.receiver == widget.peer.id;
-          final isToMe = msg.receiver == myDeviceId ||
-                         msg.receiver == userId ||
-                         msg.receiver == 'me';
+          final isToMe =
+              msg.receiver == myDeviceId ||
+              msg.receiver == userId ||
+              msg.receiver == 'me';
           return (isFromMe && isToPeer) || (isFromPeer && isToMe);
         }).toList();
 
@@ -769,14 +822,18 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
                 Icon(
                   Icons.chat_bubble_outline,
                   size: 64,
-                  color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.onSurface.withValues(alpha: 0.5),
                 ),
                 const SizedBox(height: 16),
                 Text(
                   'เริ่มต้นการสนทนาฉุกเฉิน',
                   style: TextStyle(
                     fontSize: 18,
-                    color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7),
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.onSurface.withValues(alpha: 0.7),
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -784,7 +841,9 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
                   'ส่งข้อความฉุกเฉินให้ ${widget.peer.name.isNotEmpty ? widget.peer.name : "อุปกรณ์นี้"}',
                   style: TextStyle(
                     fontSize: 14,
-                    color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.onSurface.withValues(alpha: 0.5),
                   ),
                   textAlign: TextAlign.center,
                 ),
@@ -801,14 +860,18 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
                 Icon(
                   Icons.search_off,
                   size: 64,
-                  color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.onSurface.withValues(alpha: 0.5),
                 ),
                 const SizedBox(height: 16),
                 Text(
                   'ไม่พบข้อความที่ค้นหา',
                   style: TextStyle(
                     fontSize: 18,
-                    color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7),
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.onSurface.withValues(alpha: 0.7),
                   ),
                 ),
               ],
@@ -824,9 +887,10 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
           itemCount: messages.length,
           itemBuilder: (context, index) {
             final message = messages[messages.length - 1 - index];
-            final isFromMe = message.from == myDeviceId ||
-                             message.from == userId ||
-                             message.from == 'me';
+            final isFromMe =
+                message.from == myDeviceId ||
+                message.from == userId ||
+                message.from == 'me';
             return _MessageBubble(
               message: message,
               isFromMe: isFromMe,
@@ -840,7 +904,7 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
 
   Widget _buildInputArea() {
     final cs = Theme.of(context).colorScheme;
-    
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -894,10 +958,7 @@ class _EmergencyChatScreenState extends State<EmergencyChatScreen> {
               ),
               child: IconButton(
                 onPressed: _sendMessage,
-                icon: const Icon(
-                  Icons.send,
-                  color: Colors.white,
-                ),
+                icon: const Icon(Icons.send, color: Colors.white),
               ),
             ),
           ],
@@ -921,22 +982,20 @@ class _MessageBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Row(
-        mainAxisAlignment: isFromMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+        mainAxisAlignment: isFromMe
+            ? MainAxisAlignment.end
+            : MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           if (!isFromMe) ...[
             CircleAvatar(
               radius: 16,
               backgroundColor: Colors.red.withValues(alpha: 0.2),
-              child: Icon(
-                Icons.phone_android,
-                size: 14,
-                color: Colors.red,
-              ),
+              child: Icon(Icons.phone_android, size: 14, color: Colors.red),
             ),
             const SizedBox(width: 8),
           ],
@@ -968,14 +1027,19 @@ class _MessageBubble extends StatelessWidget {
                             );
                           }
                         },
-                        child: const Text('ลบ', style: TextStyle(color: Colors.red)),
+                        child: const Text(
+                          'ลบ',
+                          style: TextStyle(color: Colors.red),
+                        ),
                       ),
                     ],
                   ),
                 );
               },
               child: Column(
-                crossAxisAlignment: isFromMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                crossAxisAlignment: isFromMe
+                    ? CrossAxisAlignment.end
+                    : CrossAxisAlignment.start,
                 children: [
                   if (!isFromMe)
                     Padding(
@@ -990,11 +1054,12 @@ class _MessageBubble extends StatelessWidget {
                       ),
                     ),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 10,
+                    ),
                     decoration: BoxDecoration(
-                      color: isFromMe 
-                          ? Colors.red 
-                          : cs.surfaceContainerHighest,
+                      color: isFromMe ? Colors.red : cs.surfaceContainerHighest,
                       borderRadius: BorderRadius.circular(18).copyWith(
                         bottomRight: isFromMe ? const Radius.circular(4) : null,
                         bottomLeft: !isFromMe ? const Radius.circular(4) : null,
@@ -1003,91 +1068,106 @@ class _MessageBubble extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                      // 📷 แสดงรูปภาพ (ถ้ามี)
-                      if (message.hasImage && message.filePath != null) ...[
-                        GestureDetector(
-                          onTap: () => _openFullScreenImage(context, heroTag: 'img_${message.id}', filePath: message.filePath!),
-                          child: Hero(
-                            tag: 'img_${message.id}',
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(12),
-                              child: Image.file(
-                                File(message.filePath!),
-                                width: 200,
-                                fit: BoxFit.cover,
-                                errorBuilder: (context, error, stackTrace) {
-                                  return Container(
-                                    padding: const EdgeInsets.all(16),
-                                    color: Colors.red.withValues(alpha: 0.1),
-                                    child: Column(
-                                      children: [
-                                        const Icon(Icons.error_outline, color: Colors.red),
-                                        const SizedBox(height: 8),
-                                        const Text(
-                                          'ไม่สามารถโหลดรูปภาพได้',
-                                          style: TextStyle(fontSize: 12),
-                                        ),
-                                      ],
-                                    ),
-                                  );
-                                },
+                        // 📷 แสดงรูปภาพ (ถ้ามี)
+                        if (message.hasImage && message.filePath != null) ...[
+                          GestureDetector(
+                            onTap: () => _openFullScreenImage(
+                              context,
+                              heroTag: 'img_${message.id}',
+                              filePath: message.filePath!,
+                            ),
+                            child: Hero(
+                              tag: 'img_${message.id}',
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(12),
+                                child: Image.file(
+                                  File(message.filePath!),
+                                  width: 200,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (context, error, stackTrace) {
+                                    return Container(
+                                      padding: const EdgeInsets.all(16),
+                                      color: Colors.red.withValues(alpha: 0.1),
+                                      child: Column(
+                                        children: [
+                                          const Icon(
+                                            Icons.error_outline,
+                                            color: Colors.red,
+                                          ),
+                                          const SizedBox(height: 8),
+                                          const Text(
+                                            'ไม่สามารถโหลดรูปภาพได้',
+                                            style: TextStyle(fontSize: 12),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  },
+                                ),
                               ),
                             ),
                           ),
-                        ),
-                        if (message.text != null && message.text!.isNotEmpty)
-                          const SizedBox(height: 8),
-                      ],
-                      // 🎥 แสดงวิดีโอ (ถ้ามี)
-                      if (message.hasVideo && message.filePath != null) ...[
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(12),
-                          child: _VideoPlayerWidget(
-                            videoPath: message.filePath!,
-                          ),
-                        ),
-                        if (message.text != null && message.text!.isNotEmpty)
-                          const SizedBox(height: 8),
-                      ],
-                      // ข้อความ (ถ้ามี)
-                      if (message.text != null && message.text!.isNotEmpty)
-                        _buildTextContent(message.text!, isFromMe, cs),
-                      const SizedBox(height: 4),
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            '${message.time.hour.toString().padLeft(2, '0')}:${message.time.minute.toString().padLeft(2, '0')}',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: isFromMe 
-                                  ? Colors.white.withValues(alpha: 0.8) 
-                                  : cs.onSurface.withValues(alpha: 0.6),
+                          if (message.text != null && message.text!.isNotEmpty)
+                            const SizedBox(height: 8),
+                        ],
+                        // 🎥 แสดงวิดีโอ (ถ้ามี)
+                        if (message.hasVideo && message.filePath != null) ...[
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(12),
+                            child: _VideoPlayerWidget(
+                              videoPath: message.filePath!,
                             ),
                           ),
-                          // 📊 แสดงสถานะข้อความ + retry button (สำหรับข้อความที่เราส่ง)
-                          if (isFromMe) ...[
-                            const SizedBox(width: 4),
-                            if (message.status == MessageStatus.pending)
-                              GestureDetector(
-                                onTap: () => appState.retrySendMessage(message.id),
-                                child: const Icon(
-                                  Icons.refresh,
-                                  size: 14,
-                                  color: Colors.orange,
-                                ),
-                              )
-                            else
-                              MessageStatusIcon(status: message.status, size: 12),
-                          ],
+                          if (message.text != null && message.text!.isNotEmpty)
+                            const SizedBox(height: 8),
                         ],
-                      ),
-                    ],
+                        // ข้อความ (ถ้ามี)
+                        if (message.text != null && message.text!.isNotEmpty)
+                          _buildTextContent(message.text!, isFromMe, cs),
+                        const SizedBox(height: 4),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              '${message.time.hour.toString().padLeft(2, '0')}:${message.time.minute.toString().padLeft(2, '0')}',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: isFromMe
+                                    ? Colors.white.withValues(alpha: 0.8)
+                                    : cs.onSurface.withValues(alpha: 0.6),
+                              ),
+                            ),
+                            // 📊 แสดงสถานะข้อความ + retry button (สำหรับข้อความที่เราส่ง)
+                            if (isFromMe) ...[
+                              const SizedBox(width: 4),
+                              if (message.status == MessageStatus.pending)
+                                GestureDetector(
+                                  onTap: () =>
+                                      appState.retrySendMessage(message.id),
+                                  child: const Icon(
+                                    Icons.refresh,
+                                    size: 14,
+                                    color: Colors.orange,
+                                  ),
+                                )
+                              else
+                                // isRead: true = peer เปิดอ่านแล้ว (read receipt) — โชว์เป็นติ๊กฟ้า
+                                // แบบเดียวกับที่ friend_chat_screen ใช้ (ทับความหมาย MessageStatus.synced เดิม)
+                                MessageStatusIcon(
+                                  status: message.isRead
+                                      ? MessageStatus.synced
+                                      : message.status,
+                                  size: 12,
+                                ),
+                            ],
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
           ),
           if (isFromMe) const SizedBox(width: 8),
         ],
@@ -1100,14 +1180,21 @@ class _MessageBubble extends StatelessWidget {
     if (mapsUrl == null) {
       return Text(
         text,
-        style: TextStyle(color: isFromMe ? Colors.white : cs.onSurface, fontSize: 15),
+        style: TextStyle(
+          color: isFromMe ? Colors.white : cs.onSurface,
+          fontSize: 15,
+        ),
       );
     }
 
     // แสดง location card
-    final lines = text.split('\n').where((l) => !l.startsWith('http')).join('\n');
+    final lines = text
+        .split('\n')
+        .where((l) => !l.startsWith('http'))
+        .join('\n');
     return GestureDetector(
-      onTap: () => launchUrl(Uri.parse(mapsUrl), mode: LaunchMode.externalApplication),
+      onTap: () =>
+          launchUrl(Uri.parse(mapsUrl), mode: LaunchMode.externalApplication),
       child: Container(
         decoration: BoxDecoration(
           color: isFromMe
@@ -1125,7 +1212,11 @@ class _MessageBubble extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(Icons.location_on, color: isFromMe ? Colors.white : cs.primary, size: 20),
+            Icon(
+              Icons.location_on,
+              color: isFromMe ? Colors.white : cs.primary,
+              size: 20,
+            ),
             const SizedBox(width: 8),
             Flexible(
               child: Column(
@@ -1133,7 +1224,10 @@ class _MessageBubble extends StatelessWidget {
                 children: [
                   Text(
                     lines.trim(),
-                    style: TextStyle(color: isFromMe ? Colors.white : cs.onSurface, fontSize: 14),
+                    style: TextStyle(
+                      color: isFromMe ? Colors.white : cs.onSurface,
+                      fontSize: 14,
+                    ),
                   ),
                   const SizedBox(height: 4),
                   Text(
@@ -1297,7 +1391,13 @@ class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
 
 class _KeyMismatchBanner extends StatelessWidget {
   final String peerName;
-  const _KeyMismatchBanner({required this.peerName});
+  final VoidCallback onAccept;
+  final VoidCallback onDismiss;
+  const _KeyMismatchBanner({
+    required this.peerName,
+    required this.onAccept,
+    required this.onDismiss,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1305,15 +1405,41 @@ class _KeyMismatchBanner extends StatelessWidget {
       width: double.infinity,
       color: Colors.orange.shade900.withValues(alpha: 0.15),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 18),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              'คีย์เข้ารหัสของ $peerName เปลี่ยนจากครั้งก่อน — ตรวจสอบตัวตนก่อนส่งข้อมูลสำคัญ',
-              style: const TextStyle(color: Colors.orange, fontSize: 12),
-            ),
+          Row(
+            children: [
+              const Icon(
+                Icons.warning_amber_rounded,
+                color: Colors.orange,
+                size: 18,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'คีย์เข้ารหัสของ $peerName เปลี่ยนจากครั้งก่อน — ข้อความจะยังเข้ารหัสด้วยคีย์เดิมจนกว่าคุณจะยืนยันตัวตนแล้วกดรับคีย์ใหม่',
+                  style: const TextStyle(color: Colors.orange, fontSize: 12),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton(
+                onPressed: onDismiss,
+                child: const Text('ปิด', style: TextStyle(fontSize: 12)),
+              ),
+              TextButton(
+                onPressed: onAccept,
+                child: const Text(
+                  'ยืนยันรับคีย์ใหม่',
+                  style: TextStyle(fontSize: 12, color: Colors.orange),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -1326,7 +1452,11 @@ class _FullScreenImageViewer extends StatelessWidget {
   final String? filePath;
   final String? url;
 
-  const _FullScreenImageViewer({required this.heroTag, this.filePath, this.url});
+  const _FullScreenImageViewer({
+    required this.heroTag,
+    this.filePath,
+    this.url,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1342,7 +1472,9 @@ class _FullScreenImageViewer extends StatelessWidget {
           child: InteractiveViewer(
             minScale: 0.5,
             maxScale: 5.0,
-            child: Center(child: Hero(tag: heroTag, child: imageWidget)),
+            child: Center(
+              child: Hero(tag: heroTag, child: imageWidget),
+            ),
           ),
         ),
       ),

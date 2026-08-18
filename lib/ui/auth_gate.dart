@@ -78,7 +78,7 @@ class _AuthGateState extends State<AuthGate> {
                   'displayName': u.displayName,
                   'updatedAt': DateTime.now().toUtc(),
                 });
-                if (mounted) {
+                if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text('Saved profile to cloud')),
                   );

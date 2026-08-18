@@ -30,6 +30,11 @@
 <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
 <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
 
+<!-- ถ่ายรูปผ่าน image_picker (ImageSource.camera) -->
+<uses-permission android:name="android.permission.CAMERA" />
+<uses-feature android:name="android.hardware.camera" android:required="false" />
+<uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+
 <!-- สำหรับ Android ≤ 12 (API 32) -->
 <uses-permission
     android:name="android.permission.READ_EXTERNAL_STORAGE"
@@ -92,6 +97,14 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- ให้ image_picker หาแอพกล้อง/แกลเลอรีเจอบน Android 11+ (package visibility) -->
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.GET_CONTENT"/>
+            <data android:mimeType="image/*"/>
         </intent>
     </queries>
 </manifest>

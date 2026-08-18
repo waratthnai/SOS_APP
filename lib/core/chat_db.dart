@@ -1,4 +1,4 @@
-﻿import 'package:sqflite/sqflite.dart';
+import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'chat_models.dart';
 import 'package:offgrid_sos/core/logger.dart';
@@ -45,34 +45,48 @@ class ChatDB {
         ''');
         // เพิ่ม index เพื่อเพิ่มความเร็วในการ query
         await db.execute('CREATE INDEX idx_user_id ON chat_messages(user_id)');
-        await db.execute('CREATE INDEX idx_conversation ON chat_messages(user_id, sender, receiver)');
+        await db.execute(
+          'CREATE INDEX idx_conversation ON chat_messages(user_id, sender, receiver)',
+        );
         await db.execute('CREATE INDEX idx_status ON chat_messages(status)');
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
           // อัปเกรดจาก version 1 เป็น 2
           await db.execute('ALTER TABLE chat_messages ADD COLUMN user_id TEXT');
-          await db.execute('ALTER TABLE chat_messages ADD COLUMN receiver TEXT');
-          await db.execute('CREATE INDEX idx_user_id ON chat_messages(user_id)');
-          await db.execute('CREATE INDEX idx_conversation ON chat_messages(user_id, sender, receiver)');
+          await db.execute(
+            'ALTER TABLE chat_messages ADD COLUMN receiver TEXT',
+          );
+          await db.execute(
+            'CREATE INDEX idx_user_id ON chat_messages(user_id)',
+          );
+          await db.execute(
+            'CREATE INDEX idx_conversation ON chat_messages(user_id, sender, receiver)',
+          );
         }
         if (oldVersion < 3) {
           // อัปเกรดจาก version 2 เป็น 3 (เพิ่ม status และ isEmergency)
           // ตรวจสอบว่า column มีอยู่แล้วหรือไม่ก่อนเพิ่ม
           try {
-            await db.execute('ALTER TABLE chat_messages ADD COLUMN status TEXT DEFAULT "sent"');
+            await db.execute(
+              'ALTER TABLE chat_messages ADD COLUMN status TEXT DEFAULT "sent"',
+            );
           } catch (e) {
             // Column อาจมีอยู่แล้ว ข้ามไป
             Log.d('Column status already exists: $e');
           }
           try {
-            await db.execute('ALTER TABLE chat_messages ADD COLUMN isEmergency INTEGER DEFAULT 0');
+            await db.execute(
+              'ALTER TABLE chat_messages ADD COLUMN isEmergency INTEGER DEFAULT 0',
+            );
           } catch (e) {
             // Column อาจมีอยู่แล้ว ข้ามไป
             Log.d('Column isEmergency already exists: $e');
           }
           try {
-            await db.execute('CREATE INDEX idx_status ON chat_messages(status)');
+            await db.execute(
+              'CREATE INDEX idx_status ON chat_messages(status)',
+            );
           } catch (e) {
             // Index อาจมีอยู่แล้ว ข้ามไป
             Log.d('Index idx_status already exists: $e');
@@ -95,7 +109,9 @@ class ChatDB {
         if (oldVersion < 5) {
           // อัปเกรดจาก version 4 เป็น 5 (เพิ่ม is_read สำหรับนับ unread)
           try {
-            await db.execute('ALTER TABLE chat_messages ADD COLUMN is_read INTEGER DEFAULT 1');
+            await db.execute(
+              'ALTER TABLE chat_messages ADD COLUMN is_read INTEGER DEFAULT 1',
+            );
           } catch (e) {
             Log.d('Column is_read already exists: $e');
           }
@@ -103,21 +119,17 @@ class ChatDB {
       },
     );
   }
-  
+
   // 👥 บันทึก/อัพเดท Peer (บันทึกชื่ออุปกรณ์)
   static Future<void> savePeerName(String peerId, String peerName) async {
     final database = await db;
-    await database.insert(
-      'peers',
-      {
-        'peer_id': peerId,
-        'peer_name': peerName,
-        'last_seen': DateTime.now().millisecondsSinceEpoch,
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await database.insert('peers', {
+      'peer_id': peerId,
+      'peer_name': peerName,
+      'last_seen': DateTime.now().millisecondsSinceEpoch,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
-  
+
   // 👥 ดึงชื่อ Peer จาก ID
   static Future<String?> getPeerName(String peerId) async {
     final database = await db;
@@ -130,29 +142,32 @@ class ChatDB {
     return maps.first['peer_name'] as String?;
   }
 
-  static Future<void> insertMessage(ChatMessage m, String userId, {String? receiver}) async {
+  static Future<void> insertMessage(
+    ChatMessage m,
+    String userId, {
+    String? receiver,
+  }) async {
     final database = await db;
-    await database.insert(
-      'chat_messages',
-      {
-        'id': m.id,
-        'user_id': userId,
-        'sender': m.from,
-        'receiver': receiver,
-        'type': m.type.name,
-        'text': m.text,
-        'filePath': m.filePath,
-        'time': m.time.millisecondsSinceEpoch,
-        'status': m.status.name,
-        'isEmergency': m.isEmergency ? 1 : 0,
-        'is_read': m.isRead ? 1 : 0,
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await database.insert('chat_messages', {
+      'id': m.id,
+      'user_id': userId,
+      'sender': m.from,
+      'receiver': receiver,
+      'type': m.type.name,
+      'text': m.text,
+      'filePath': m.filePath,
+      'time': m.time.millisecondsSinceEpoch,
+      'status': m.status.name,
+      'isEmergency': m.isEmergency ? 1 : 0,
+      'is_read': m.isRead ? 1 : 0,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
-  
+
   // อัพเดทสถานะข้อความ
-  static Future<void> updateMessageStatus(String messageId, MessageStatus status) async {
+  static Future<void> updateMessageStatus(
+    String messageId,
+    MessageStatus status,
+  ) async {
     final database = await db;
     await database.update(
       'chat_messages',
@@ -161,7 +176,7 @@ class ChatDB {
       whereArgs: [messageId],
     );
   }
-  
+
   // ดึงข้อความที่มีสถานะ pending (รอส่ง)
   static Future<List<ChatMessage>> getPendingMessages(String userId) async {
     final database = await db;
@@ -173,21 +188,27 @@ class ChatDB {
     );
     return _mapsToChatMessages(maps);
   }
-  
+
   // ดึงข้อความที่ยังไม่ซิงก์ขึ้น Cloud (sent = ส่งออกผ่าน P2P, delivered = รับเข้า)
   static Future<List<ChatMessage>> getUnsyncedMessages(String userId) async {
     final database = await db;
     final maps = await database.query(
       'chat_messages',
       where: 'user_id = ? AND status IN (?, ?)',
-      whereArgs: [userId, MessageStatus.sent.name, MessageStatus.delivered.name],
+      whereArgs: [
+        userId,
+        MessageStatus.sent.name,
+        MessageStatus.delivered.name,
+      ],
       orderBy: 'time ASC',
     );
     return _mapsToChatMessages(maps);
   }
-  
+
   // Helper function to convert maps to ChatMessages
-  static List<ChatMessage> _mapsToChatMessages(List<Map<String, dynamic>> maps) {
+  static List<ChatMessage> _mapsToChatMessages(
+    List<Map<String, dynamic>> maps,
+  ) {
     return maps.map((m) {
       MessageStatus status;
       try {
@@ -197,7 +218,7 @@ class ChatDB {
       } catch (e) {
         status = MessageStatus.sent;
       }
-      
+
       return ChatMessage(
         id: m['id'] as String,
         from: m['sender'] as String,
@@ -226,11 +247,15 @@ class ChatDB {
   }
 
   // ดึงข้อความในห้องแชทระหว่าง user กับ peer
-  static Future<List<ChatMessage>> getConversation(String userId, String peerId) async {
+  static Future<List<ChatMessage>> getConversation(
+    String userId,
+    String peerId,
+  ) async {
     final database = await db;
     final maps = await database.query(
       'chat_messages',
-      where: 'user_id = ? AND ((sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?))',
+      where:
+          'user_id = ? AND ((sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?))',
       whereArgs: [userId, userId, peerId, peerId, userId],
       orderBy: 'time ASC',
     );
@@ -245,6 +270,17 @@ class ChatDB {
       {'is_read': 1},
       where: 'user_id = ? AND sender = ? AND is_read = 0',
       whereArgs: [userId, peerId],
+    );
+  }
+
+  /// ทำเครื่องหมายว่าอ่านแล้วสำหรับข้อความเดียว (ใช้ตอนได้รับ read receipt จาก peer)
+  static Future<void> markMessageAsRead(String messageId) async {
+    final database = await db;
+    await database.update(
+      'chat_messages',
+      {'is_read': 1},
+      where: 'id = ?',
+      whereArgs: [messageId],
     );
   }
 
@@ -289,7 +325,9 @@ class ChatDB {
       whereArgs: ['anonymous'],
     );
     if (count > 0) {
-      Log.d('[ChatDB] 🔄 Migrated $count anonymous messages to user $newUserId');
+      Log.d(
+        '[ChatDB] 🔄 Migrated $count anonymous messages to user $newUserId',
+      );
     }
   }
 }

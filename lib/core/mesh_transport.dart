@@ -1,6 +1,7 @@
 ﻿import 'dart:async';
 import 'transport.dart';
 import 'nearby_transport.dart';
+import 'e2ee_service.dart';
 import 'package:offgrid_sos/core/logger.dart';
 
 /// 📡 Radio Mesh Transport - Simulated Multi-Hop Network
@@ -17,6 +18,7 @@ class MeshTransport implements Transport {
   final NearbyTransport _baseTransport;
   final String deviceId;
   final String deviceName; // 🔧 เพิ่ม device name
+  final E2EEService _e2ee; // 🔏 เซ็น/ตรวจลายเซ็นข้อความ mesh ป้องกัน route/identity spoofing
   
   final _peersCtrl = StreamController<List<Peer>>.broadcast();
   final _msgCtrl = StreamController<Message>.broadcast();
@@ -48,8 +50,32 @@ class MeshTransport implements Transport {
   MeshTransport({
     required this.deviceId,
     required this.deviceName, // 🔧 รับ device name
-  }) : _baseTransport = NearbyTransport(deviceName: deviceName) {
+    required E2EEService e2ee,
+  })  : _e2ee = e2ee,
+        _baseTransport = NearbyTransport(deviceName: deviceName) {
     _init();
+  }
+
+  /// สร้าง _MeshMessage ที่เซ็นด้วยคีย์ของเรา (ใช้ตอนเราเป็น originator เท่านั้น)
+  Future<_MeshMessage> _createMessage({
+    required String? to,
+    required String body,
+    required int ttl,
+  }) async {
+    final id = _generateMessageId();
+    final pubKeyB64 = await _e2ee.meshSigningPubKeyB64();
+    final canonical = '$id|$deviceId|${to ?? "ALL"}|$body';
+    final sigB64 = await _e2ee.signMeshMessage(canonical);
+    return _MeshMessage(
+      id: id,
+      from: deviceId,
+      to: to,
+      body: body,
+      ttl: ttl,
+      hops: [],
+      pubKeyB64: pubKeyB64,
+      sigB64: sigB64,
+    );
   }
 
   void _init() {
@@ -89,14 +115,7 @@ class MeshTransport implements Transport {
     
     // 🔧 ส่ง HELLO ทันทีเมื่อเริ่ม scan
     Future.delayed(const Duration(seconds: 2), () async {
-      final helloMessage = _MeshMessage(
-        id: _generateMessageId(),
-        from: deviceId,
-        to: null,
-        body: 'HELLO:$deviceName',
-        ttl: 3,
-        hops: [],
-      );
+      final helloMessage = await _createMessage(to: null, body: 'HELLO:$deviceName', ttl: 3);
       await _broadcastMeshMessage(helloMessage);
       Log.d('📡 [MESH] Initial HELLO sent with name=$deviceName');
     });
@@ -145,21 +164,12 @@ class MeshTransport implements Transport {
     
     // เป็น mesh hop → ใช้ MESH: protocol
     Log.d('📡 [MESH] Using MESH protocol for multi-hop routing to ${to.name}');
-    
-    final messageId = _generateMessageId();
+
     final ttl = 5; // จำกัด 5 hops
-    
-    final meshMessage = _MeshMessage(
-      id: messageId,
-      from: deviceId,
-      to: to.id,
-      body: body,
-      ttl: ttl,
-      hops: [],
-    );
-    
+    final meshMessage = await _createMessage(to: to.id, body: body, ttl: ttl);
+
     // บันทึกว่าเราส่งข้อความนี้แล้ว
-    _messageHistory[messageId] = DateTime.now();
+    _messageHistory[meshMessage.id] = DateTime.now();
     
     // Unicast via mesh
     final bodyPreview = body.length > 50 ? '${body.substring(0, 50)}...' : body;
@@ -250,10 +260,24 @@ class MeshTransport implements Transport {
         Log.d('📡 [MESH] Duplicate message ${safeSubstring(meshMessage.id, 20)}... - ignored');
         return;
       }
-      
+
+      // 🔏 ตรวจลายเซ็นก่อนเชื่อ `from`/routing data ใดๆ — กัน route/identity spoofing
+      // (ต้องเช็คก่อนแก้ routing table เสมอ ไม่งั้น attacker ปลอม from ได้)
+      final canonical = '${meshMessage.id}|${meshMessage.from}|${meshMessage.to ?? "ALL"}|${meshMessage.body}';
+      final signatureValid = await _e2ee.verifyMeshMessage(
+        meshMessage.from,
+        canonical,
+        meshMessage.pubKeyB64,
+        meshMessage.sigB64,
+      );
+      if (!signatureValid) {
+        Log.d('📡 [MESH] ❌ ลายเซ็นไม่ถูกต้อง/ปลอมตัวจาก ${safeSubstring(meshMessage.from, 20)}... — ทิ้งข้อความ');
+        return;
+      }
+
       // บันทึกว่าได้รับข้อความนี้แล้ว
       _messageHistory[meshMessage.id] = DateTime.now();
-      
+
       // 🔧 เช็คว่า message มาจาก direct peer หรือไม่
       final isFromDirectPeer = _routingTable.containsKey(message.fromPeerId) && 
                                 _routingTable[message.fromPeerId] == message.fromPeerId;
@@ -321,13 +345,10 @@ class MeshTransport implements Transport {
               .join(',');
 
           // ส่งกลับไป
-          final response = _MeshMessage(
-            id: _generateMessageId(),
-            from: deviceId,
+          final response = await _createMessage(
             to: meshMessage.from,
             body: 'PEER_LIST_RESPONSE:$myPeers',
             ttl: 3,
-            hops: [],
           );
 
           await _sendMeshMessage(response);
@@ -452,44 +473,20 @@ class MeshTransport implements Transport {
   void _startRouteDiscovery() {
     // 🔧 ส่ง HELLO แค่ครั้งเดียวตอนเริ่ม (ไม่ส่งซ้ำ ๆ เพราะมี name จาก Nearby แล้ว)
     Future.delayed(const Duration(seconds: 2), () async {
-      final helloMessage = _MeshMessage(
-        id: _generateMessageId(),
-        from: deviceId,
-        to: null, // broadcast
-        body: 'HELLO:$deviceName',
-        ttl: 3,
-        hops: [],
-      );
-      
+      final helloMessage = await _createMessage(to: null, body: 'HELLO:$deviceName', ttl: 3);
       await _broadcastMeshMessage(helloMessage);
       Log.d('📡 [MESH] Initial HELLO sent with name=$deviceName');
     });
-    
+
     // ✅ ส่ง HELLO ซ้ำทุก 30 วินาที สำหรับ mesh hops และขอข้อมูล peer list
     _routeDiscoveryTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
       // 1. ส่ง HELLO เพื่อแจ้งตำแหน่งของเรา
-      final helloMessage = _MeshMessage(
-        id: _generateMessageId(),
-        from: deviceId,
-        to: null,
-        body: 'HELLO:$deviceName',
-        ttl: 3,
-        hops: [],
-      );
-      
+      final helloMessage = await _createMessage(to: null, body: 'HELLO:$deviceName', ttl: 3);
       await _broadcastMeshMessage(helloMessage);
       Log.d('📡 [MESH] Periodic HELLO refresh (30s interval)');
-      
+
       // 2. ขอรายชื่อ peers จากอุปกรณ์ที่เชื่อมต่ออยู่
-      final peerListRequest = _MeshMessage(
-        id: _generateMessageId(),
-        from: deviceId,
-        to: null, // broadcast
-        body: 'PEER_LIST_REQUEST',
-        ttl: 1, // ไม่ forward ต่อ
-        hops: [],
-      );
-      
+      final peerListRequest = await _createMessage(to: null, body: 'PEER_LIST_REQUEST', ttl: 1);
       await _broadcastMeshMessage(peerListRequest);
       Log.d('📡 [MESH] Requesting peer lists from neighbors');
     });
@@ -603,6 +600,9 @@ class MeshTransport implements Transport {
 }
 
 /// 📦 Mesh Message Format
+/// pubKeyB64/sigB64 คือ Ed25519 public key + signature ของ `from` (originator)
+/// เซ็นทับ `id|from|to|body` (ไม่รวม ttl/hops เพราะเปลี่ยนทุก hop) — ใช้ตรวจว่า
+/// `from` ไม่ได้ถูกปลอม ก่อนเอาข้อมูลไปอัปเดต routing table หรือแสดงในแชท
 class _MeshMessage {
   final String id;
   final String from;
@@ -610,6 +610,8 @@ class _MeshMessage {
   final String body;
   final int ttl;
   final List<String> hops;
+  final String pubKeyB64;
+  final String sigB64;
 
   _MeshMessage({
     required this.id,
@@ -618,13 +620,15 @@ class _MeshMessage {
     required this.body,
     required this.ttl,
     required this.hops,
+    required this.pubKeyB64,
+    required this.sigB64,
   });
 
-  /// Encode: MESH:{id}:{from}:{to}:{ttl}:{hops}:{body}
+  /// Encode: MESH:{id}:{from}:{to}:{ttl}:{hops}:{pubKey}:{sig}:{body}
   String encode() {
     final toField = to ?? 'ALL';
     final hopsField = hops.isEmpty ? 'DIRECT' : hops.join(',');
-    return 'MESH:$id:$from:$toField:$ttl:$hopsField:$body';
+    return 'MESH:$id:$from:$toField:$ttl:$hopsField:$pubKeyB64:$sigB64:$body';
   }
 
   /// Decode from encoded string
@@ -632,34 +636,37 @@ class _MeshMessage {
     if (!encoded.startsWith('MESH:')) {
       throw FormatException('Invalid mesh message format');
     }
-    
+
     // ตัดคำว่า "MESH:" ออก
     final content = encoded.substring(5);
-    
-    // Split แค่ 6 ส่วนแรก (id:from:to:ttl:hops:body...)
+
+    // Split แค่ 8 ส่วนแรก (id:from:to:ttl:hops:pubKey:sig:body...)
     // ส่วนที่เหลือทั้งหมดจะเป็น body (รองรับ : ใน body)
     final parts = content.split(':');
-    if (parts.length < 6) {
-      throw FormatException('Invalid mesh message parts: expected at least 6, got ${parts.length}');
+    if (parts.length < 8) {
+      throw FormatException('Invalid mesh message parts: expected at least 8, got ${parts.length}');
     }
-    
+
     // Parse hops อย่างปลอดภัย
     List<String> hopList = [];
     if (parts[4] != 'DIRECT' && parts[4].isNotEmpty) {
       hopList = parts[4].split(',').where((h) => h.isNotEmpty).toList();
     }
-    
+
     return _MeshMessage(
       id: parts[0],
       from: parts[1],
       to: parts[2] == 'ALL' ? null : parts[2],
       ttl: int.tryParse(parts[3]) ?? 5, // fallback to 5 if parse fails
       hops: hopList,
-      body: parts.sublist(5).join(':'), // เอาส่วนที่เหลือทั้งหมดมาต่อกันด้วย :
+      pubKeyB64: parts[5],
+      sigB64: parts[6],
+      body: parts.sublist(7).join(':'), // เอาส่วนที่เหลือทั้งหมดมาต่อกันด้วย :
     );
   }
 
-  /// สร้าง message ใหม่ที่ลด TTL และเพิ่ม hop
+  /// สร้าง message ใหม่ที่ลด TTL และเพิ่ม hop (pubKey/sig คงเดิม เพราะยังเป็นข้อความ
+  /// ของ originator เดิม แค่ relay ต่อ ไม่ได้เซ็นใหม่)
   _MeshMessage decrementTTL(String currentDeviceId) {
     return _MeshMessage(
       id: id,
@@ -668,6 +675,8 @@ class _MeshMessage {
       body: body,
       ttl: ttl - 1,
       hops: [...hops, currentDeviceId],
+      pubKeyB64: pubKeyB64,
+      sigB64: sigB64,
     );
   }
 

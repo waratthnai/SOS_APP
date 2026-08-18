@@ -187,9 +187,33 @@ class FirebaseService extends ChangeNotifier {
   }
 
   /// บันทึกข้อมูลโปรไฟล์ผู้ใช้พร้อม User ID
+  /// เขียนคู่กันสองที่: users/{id} (ข้อมูลเต็ม รวม email) อ่านได้เฉพาะเจ้าของ
+  /// และ public_profiles/{id} (ไม่มี email/fcmToken) อ่านได้ทุกคนสำหรับค้นหา/แสดงเพื่อน
   Future<void> saveFullUserProfile(UserProfile profile) async {
     if (_db == null) return;
     await _db!.collection('users').doc(profile.id).set(profile.toJson());
+    await _db!.collection('public_profiles').doc(profile.id).set(_publicProfileJson(profile));
+  }
+
+  Map<String, dynamic> _publicProfileJson(UserProfile profile) {
+    final json = profile.toJson();
+    json.remove('email');
+    return json;
+  }
+
+  /// ค้นหาผู้ใช้อื่นจาก User ID โดยอ่านจาก public_profiles (ไม่มี email/fcmToken)
+  Future<UserProfile?> findPublicProfileByUserId(String userId, {bool forceRefresh = false}) async {
+    if (_db == null) return null;
+    try {
+      final source = forceRefresh ? Source.server : Source.serverAndCache;
+      final doc = await _db!.collection('public_profiles').doc(userId).get(GetOptions(source: source));
+      if (doc.exists && doc.data() != null) {
+        return UserProfile.fromJson(doc.data()!);
+      }
+    } catch (e) {
+      Log.d('[Firebase] ❌ Error finding public profile: $e');
+    }
+    return null;
   }
 
   /// ค้นหาผู้ใช้จาก User ID
@@ -242,7 +266,7 @@ class FirebaseService extends ChangeNotifier {
     if (_db == null) return [];
     try {
       final query = await _db!
-          .collection('users')
+          .collection('public_profiles')
           .where('name', isGreaterThanOrEqualTo: name)
           .where('name', isLessThan: '$name\uf8ff')
           .limit(10)
@@ -267,10 +291,13 @@ class FirebaseService extends ChangeNotifier {
       Log.d('[Firebase] 🔄 อัปเดตสถานะออนไลน์: $userId → ${isOnline ? "ออนไลน์" : "ออฟไลน์"}');
       
       // ใช้ set พร้อม merge: true เพื่อสร้าง document ถ้ายังไม่มี หรืออัปเดตถ้ามีแล้ว
-      await _db!.collection('users').doc(userId).set({
+      final statusUpdate = {
         'isOnline': isOnline,
         'lastActiveAt': DateTime.now().toIso8601String(),
-      }, SetOptions(merge: true));
+      };
+      await _db!.collection('users').doc(userId).set(statusUpdate, SetOptions(merge: true));
+      // อัปเดต public_profiles คู่กัน เพราะเพื่อนเช็คสถานะออนไลน์จากตรงนี้
+      await _db!.collection('public_profiles').doc(userId).set(statusUpdate, SetOptions(merge: true));
       
       Log.d('[Firebase] ✅ อัปเดตสถานะออนไลน์สำเร็จ');
       
@@ -387,8 +414,8 @@ class FirebaseService extends ChangeNotifier {
       Log.d('[Firebase]   - ให้ผู้ใช้: $userId');
       Log.d('[Firebase]   - เพิ่มเพื่อน: $friendUserId');
       
-      // ดึงข้อมูลของเพื่อน
-      final friendDoc = await _db!.collection('users').doc(friendUserId).get();
+      // ดึงข้อมูลของเพื่อนจาก public_profiles (users/{friendUserId} อ่านได้แค่เจ้าของ)
+      final friendDoc = await _db!.collection('public_profiles').doc(friendUserId).get();
       if (!friendDoc.exists) {
         Log.d('[Firebase] ⚠️ ไม่พบข้อมูลผู้ใช้: $friendUserId');
         return;
@@ -572,20 +599,30 @@ class FirebaseService extends ChangeNotifier {
   }
 
   /// ดึงข้อความแชทกับเพื่อน
-  Future<List<Map<String, dynamic>>> getFriendChatMessages(String user1Id, String user2Id) async {
+  /// [since] ถ้าระบุ จะดึงเฉพาะข้อความที่ใหม่กว่าเวลานี้ (incremental sync) แทนการดึงประวัติทั้งหมดทุกครั้ง
+  Future<List<Map<String, dynamic>>> getFriendChatMessages(
+    String user1Id,
+    String user2Id, {
+    DateTime? since,
+  }) async {
     if (_db == null) return [];
     try {
       final chatId = _generateChatId(user1Id, user2Id);
-      Log.d('[Firebase] 🔍 ดึงข้อความ Chat ID: $chatId');
-      
-      final query = await _db!
+      Log.d('[Firebase] 🔍 ดึงข้อความ Chat ID: $chatId${since != null ? " (ตั้งแต่ $since)" : ""}');
+
+      Query<Map<String, dynamic>> q = _db!
           .collection('friend_chats')
           .doc(chatId)
           .collection('messages')
-          .orderBy('time', descending: false)
-          .get();
-      
-      Log.d('[Firebase] ✅ พบ ${query.docs.length} ข้อความ');
+          .orderBy('time', descending: false);
+
+      if (since != null) {
+        q = q.where('time', isGreaterThan: Timestamp.fromDate(since));
+      }
+
+      final query = await q.get();
+
+      Log.d('[Firebase] ✅ พบ ${query.docs.length} ข้อความ${since != null ? "ใหม่" : ""}');
       
       return query.docs.map((doc) {
         final data = doc.data();
@@ -615,6 +652,28 @@ class FirebaseService extends ChangeNotifier {
               data['id'] = data['id'] ?? doc.id;
               return data;
             }).toList());
+  }
+
+  /// ทำเครื่องหมายว่าอ่านแล้ว (isRead: true) สำหรับข้อความที่ระบุ — เขียนกลับขึ้น Firestore
+  /// เพื่อให้ฝั่งผู้ส่งเห็นสถานะ "อ่านแล้ว" จริงผ่าน real-time listener (ไม่ใช่แค่ local flag)
+  Future<void> markFriendChatMessagesAsRead(
+    String user1Id,
+    String user2Id,
+    List<String> messageIds,
+  ) async {
+    if (_db == null || messageIds.isEmpty) return;
+    try {
+      final chatId = _generateChatId(user1Id, user2Id);
+      final collection = _db!.collection('friend_chats').doc(chatId).collection('messages');
+      final batch = _db!.batch();
+      for (final id in messageIds) {
+        batch.update(collection.doc(id), {'isRead': true});
+      }
+      await batch.commit();
+      Log.d('[Firebase] ✅ อัปเดต isRead=true ให้ ${messageIds.length} ข้อความ');
+    } catch (e) {
+      Log.d('[Firebase] ❌ Error marking messages as read: $e');
+    }
   }
 
   /// Stream ข้อความขาเข้าจากเพื่อนคนนึง (fromUserId == friendUserId) ที่มาหลัง since
