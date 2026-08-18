@@ -30,19 +30,30 @@ Four implementations (switchable at runtime via `AppState.selectedProtocol`):
 
 `AppState` (`lib/core/app_state.dart`) is a top-level `final` global singleton (`ChangeNotifier`). No Provider/Riverpod — accessed directly as `appState`. Initialized in `lib/main.dart`, device name set from SharedPreferences before UI starts.
 
-Key timers running in `AppState`:
+`AppState` itself only holds core lifecycle/orchestration (`_subs()` transport event dispatcher, login/logout, background service). Its `with` clause mixes in several `mixin`s, each in its own `part` file (`lib/core/app_state_*.dart`) sharing the same library via `part of 'app_state.dart';` — this is required because Dart privacy (`_`-prefixed members) is per-*library*, not per-class, so a mixin split across a normal `import` couldn't reach `AppState`'s private fields:
+- `app_state_location.dart` — own-position GPS broadcast/stream
+- `app_state_connection_monitor.dart` — keep-alive heartbeat + reconnect monitor
+- `app_state_stable_peers.dart` — stable peer list + cleanup timer
+- `app_state_online_status.dart` — Firebase online-status heartbeat
+- `app_state_sos_rescue.dart` — SOS/Rescue mode toggle, broadcast, and incoming peer-status handling
+- `app_state_mesh_peers.dart` — peer GPS tracking + mesh relay dedup/TTL/topology stats
+- `app_state_emergency_chat.dart` — both P2P emergency chat and friend cloud chat (kept together; they share `_chatMessages`/`_friendChats` helpers too tightly to split further)
+
+Key timers running in `AppState` (across the mixins above):
 - Keep Alive: 30s → sends `KEEP_ALIVE:timestamp` to connected peers
 - Connection Monitor: 10s → reconnects whenever scanning and no peers connected (all modes)
 - Stable Peers cleanup: 5s → removes peers not seen for 45s
 - Location Broadcast: 8s → sends GPS to peers
-
-Mock peers (debug UI) are stored in `_mockPeers` (separate from `_peers`) so transport events don't clear them.
 
 ### Chat Systems
 
 Two separate systems:
 1. **Emergency P2P chat** (`ChatMessage`) — stored in `lib/core/chat_db.dart` (SQLite), transported over the active P2P transport
 2. **Friend cloud chat** (`FriendChatMessage`) — stored in `lib/core/chat_db.dart`, uses Firebase Firestore
+
+### UI Entry Point
+
+`lib/main.dart` only holds `main()` and `OffGridApp`/`OffGridAppState` (the `MaterialApp` + theme wrapper). The top-level screens it used to contain live in `lib/ui/`: `root_nav.dart` (bottom nav), `home_screen.dart`, `settings_screen.dart`, `notifications_screen.dart`.
 
 ### Firebase Layer
 

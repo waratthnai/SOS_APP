@@ -11,15 +11,17 @@
 
 ## สถานะปัจจุบัน
 
-- **กำลังทำ**: Phase 0-5 เสร็จสมบูรณ์ทั้งหมดแล้ว
-- **ทำล่าสุด**: Phase 5 — cloud layer (`firebase_service.dart`/`friend_service.dart`/`fcm_service.dart`)
-  สะอาดอยู่แล้ว เจอ+แก้ FCM token เต็มหลุด log 1 จุด — analyze 0, test 29/29
+- **กำลังทำ**: Phase 0-8 เสร็จหมดแล้ว (ยกเว้น manual device test ที่ทำในสภาพแวดล้อมนี้ไม่ได้) —
+  **cleanup ของ codebase เสร็จสมบูรณ์ตามแผน**
+- **ทำล่าสุด**: Phase 6-7 ประเมินแล้วว่าไม่มีงานคุ้มค่าเพิ่ม (ทุกไฟล์เล็กกว่าเกณฑ์ + analyze สะอาดอยู่แล้ว),
+  Phase 8 อัปเดต `CLAUDE.md` ให้ตรงกับโครงสร้างใหม่ — analyze 0, test 29/29
 - **สรุปทั้งหมด**: `app_state.dart` 3772→1310 (-65%), `main.dart` 1815→129 (-93%),
   `emergency_chat_screen.dart` 1483→949 (-36%), ลบ dead code 3 จุด (`NearbyShareScreen`,
   `dummySwitch1/2`, `_gpsTimer`), แก้ log FCM token 1 จุด, quick-win lint 18 จุดใน Phase 0,
-  transport layer + cloud layer สะอาดอยู่แล้ว
-- **ขั้นต่อไป**: Phase 6+ (UI screens ที่เหลือ เช่น `friends_screen.dart`/`add_friend_screen.dart`/
-  `profile_screen.dart` ฯลฯ) — ดู Phase 6-8 ในแผนด้านล่าง
+  `flutter analyze lib` = **0 issues ทั้งโปรเจกต์**, `flutter test` = 29/29 ผ่านทุกครั้งที่ verify
+- **ขั้นต่อไป**: ไม่มีงาน cleanup เพิ่มที่ระบุได้ชัดเจนในตอนนี้ — สิ่งที่เหลือคือ **manual smoke test บน
+  อุปกรณ์จริง** (โหมด SOS/Rescue + สลับ transport ทั้ง 4 แบบ) ก่อน merge/release ถ้าต้องการลงลึก Phase 6/7
+  เพิ่มเติม (จัดระเบียบไฟล์เล็ก ๆ ที่ไม่มีปัญหาจริง) ให้ผู้ใช้ระบุไฟล์/เป้าหมายที่ต้องการ
   — ดู Phase 5-8 ในแผนด้านล่าง
 
 ---
@@ -255,12 +257,29 @@
 
 - [ ] `chat_db.dart`, `friend_db.dart`, `chat_models.dart`, `friend_models.dart`, `chat_filter_service.dart`, `message_queue_service.dart`, `device_id_manager.dart`, `notification_service.dart`, `app_theme.dart`
 
-## Phase 8 — Final pass
+## Phase 6-7 — ประเมินแล้ว: ไม่มีงานที่คุ้มค่าเพิ่มในตอนนี้
 
-- [ ] รัน `flutter analyze` เทียบกับ baseline (Phase 0) — ต้องไม่มี warning เพิ่มขึ้น
-- [ ] รัน `flutter test` ทั้งหมดผ่าน
-- [ ] Manual smoke test ครบทุกโหมด (passive, SOS, rescue) และทั้ง 4 transport อย่างน้อยแบบ UI-level (ไม่ต้องมีอุปกรณ์คู่ถ้าทำไม่ได้ ให้บอกผู้ใช้ชัดเจนว่าทดสอบระดับไหน)
-- [ ] อัปเดต `CLAUDE.md` ถ้าโครงสร้างไฟล์เปลี่ยนไปจากที่ระบุไว้เดิม
+สำรวจไฟล์ทั้งหมดใน Phase 6 (`friends_screen.dart`, `add_friend_screen.dart`, `friend_requests_screen.dart`,
+`friend_profile_screen.dart`, `profile_screen.dart`, `device_name_setup_screen.dart`, `auth_gate.dart`,
+`lib/widgets/*`, `sos_orb.dart`, `debug_screen.dart`, `map_screen.dart`, `notification_panel.dart`,
+`chat_filter_bar.dart`) และ Phase 7 (`chat_db.dart`, `friend_db.dart`, `chat_models.dart`,
+`friend_models.dart`, `chat_filter_service.dart`, `message_queue_service.dart`, `device_id_manager.dart`,
+`notification_service.dart`, `app_theme.dart`) — ไฟล์ใหญ่สุดคือ `profile_screen.dart` ที่ 640 บรรทัด
+ทุกไฟล์อยู่ใต้เกณฑ์ขนาดที่ Phase นั้น ๆ กำหนดไว้เองอยู่แล้ว (< 700 / < 350) และ **`flutter analyze lib`
+สะอาด 0 issues ทั้งโปรเจกต์** ไม่พบ dead code/lint ที่ปลอดภัยให้แก้เพิ่ม การแตกไฟล์เหล่านี้ต่อจะเป็นแค่
+judgment call เชิงจัดระเบียบ ไม่ใช่การแก้ปัญหาที่มีอยู่จริง — พักไว้ก่อน รอผู้ใช้สั่งถ้าต้องการให้ลงลึกเพิ่ม
+
+## Phase 8 — Final pass — ✅ เสร็จ (ยกเว้น manual device test)
+
+- [x] รัน `flutter analyze` เทียบกับ baseline (Phase 0) — **0 issues ทั้งโปรเจกต์** (ดีกว่า baseline เดิม
+  ที่มี 18 จุด)
+- [x] รัน `flutter test` ทั้งหมดผ่าน — 29/29 ทุกครั้งที่ verify ตลอด session
+- [ ] Manual smoke test บนอุปกรณ์จริง — **ยังไม่ได้ทำ** (ไม่มีอุปกรณ์/emulator ในสภาพแวดล้อมนี้) การเปลี่ยนแปลง
+  ทั้งหมดยืนยันด้วย static analysis + unit test เท่านั้น ไม่ใช่ end-to-end บนอุปกรณ์จริง — แนะนำให้ทดสอบ
+  จริงก่อน merge/release โดยเฉพาะโหมด SOS/Rescue และการสลับ transport ทั้ง 4 แบบ
+- [x] อัปเดต `CLAUDE.md` — เพิ่มรายละเอียดโครงสร้าง mixin ใหม่ของ `app_state.dart` และโครงสร้าง UI ใหม่ของ
+  `main.dart`/`lib/ui/` ให้ตรงกับโค้ดปัจจุบัน (ลบข้อมูลเก่าที่ล้าสมัยไปแล้ว เช่น `_mockPeers` ที่ไม่มีอยู่จริง
+  ในโค้ดแล้ว)
 
 ---
 
@@ -309,3 +328,9 @@
 - 2026-08-18 — Phase 5: cloud layer สะอาดอยู่แล้ว (0 issues, error handling ครอบคลุมดี) เจอ FCM token
   เต็มหลุด log ใน `fcm_service.dart` (debug-only แต่ควรแก้) — แก้ด้วย `_maskToken()` โชว์แค่ 8 ตัวแรก
   — analyze 0, test 29/29 — **Phase 0-5 เสร็จสมบูรณ์ทั้งหมด**
+- 2026-08-18 — Phase 6-7: สำรวจไฟล์ที่เหลือทั้งหมด (UI screens เล็ก, core services เล็ก) — ทุกไฟล์อยู่ใต้
+  เกณฑ์ขนาดที่ตั้งไว้เอง (< 700/350 บรรทัด) และ analyze สะอาดอยู่แล้ว ไม่พบงานคุ้มค่าให้ทำเพิ่ม — ประเมินว่า
+  "เสร็จ" โดยไม่ต้องแก้โค้ด. Phase 8: อัปเดต `CLAUDE.md` ให้ตรงกับโครงสร้าง mixin/UI ใหม่ (ลบข้อมูลล้าสมัย
+  เช่น `_mockPeers`) ยืนยัน analyze 0 + test 29/29 อีกครั้ง — **manual device test ยังไม่ได้ทำ** เพราะไม่มี
+  อุปกรณ์/emulator ในสภาพแวดล้อมนี้ แนะนำผู้ใช้ทดสอบจริงก่อน release — **Phase 0-8 เสร็จสมบูรณ์ทั้งหมด**
+  (cleanup ตามแผนนี้จบแล้ว เหลือแค่ manual smoke test)
