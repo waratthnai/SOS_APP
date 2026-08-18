@@ -11,14 +11,15 @@
 
 ## สถานะปัจจุบัน
 
-- **กำลังทำ**: Phase 0-4 เสร็จสมบูรณ์ทั้งหมดแล้ว
-- **ทำล่าสุด**: Phase 4 — สำรวจ transport layer ทั้ง 4 ไฟล์ สะอาดอยู่แล้ว (0 issues) เจอ+ลบ dead field
-  `_gpsTimer` เดียวใน `wifi_direct_transport.dart` (ถามผู้ใช้ก่อนตามกติกา) — analyze 0, test 29/29
+- **กำลังทำ**: Phase 0-5 เสร็จสมบูรณ์ทั้งหมดแล้ว
+- **ทำล่าสุด**: Phase 5 — cloud layer (`firebase_service.dart`/`friend_service.dart`/`fcm_service.dart`)
+  สะอาดอยู่แล้ว เจอ+แก้ FCM token เต็มหลุด log 1 จุด — analyze 0, test 29/29
 - **สรุปทั้งหมด**: `app_state.dart` 3772→1310 (-65%), `main.dart` 1815→129 (-93%),
   `emergency_chat_screen.dart` 1483→949 (-36%), ลบ dead code 3 จุด (`NearbyShareScreen`,
-  `dummySwitch1/2`, `_gpsTimer`), quick-win lint 18 จุดใน Phase 0, transport layer สะอาดอยู่แล้ว
-- **ขั้นต่อไป**: Phase 5+ (`lib/cloud/firebase_service.dart`, `lib/core/friend_service.dart`,
-  UI screens ที่เหลือ เช่น `friends_screen.dart`/`add_friend_screen.dart`/`profile_screen.dart` ฯลฯ)
+  `dummySwitch1/2`, `_gpsTimer`), แก้ log FCM token 1 จุด, quick-win lint 18 จุดใน Phase 0,
+  transport layer + cloud layer สะอาดอยู่แล้ว
+- **ขั้นต่อไป**: Phase 6+ (UI screens ที่เหลือ เช่น `friends_screen.dart`/`add_friend_screen.dart`/
+  `profile_screen.dart` ฯลฯ) — ดู Phase 6-8 ในแผนด้านล่าง
   — ดู Phase 5-8 ในแผนด้านล่าง
 
 ---
@@ -226,11 +227,20 @@
 - [x] `ble_transport.dart` — สะอาดอยู่แล้ว ไม่แตะเพิ่ม (ยังไม่ได้ทดสอบบนอุปกรณ์จริงตาม TODO.md)
 - [x] ยืนยันด้วย `flutter analyze lib` (0 issues) + `flutter test` (29/29 ผ่าน)
 
-## Phase 5 — Cloud/Firebase layer: `firebase_service.dart`, `friend_service.dart`, `fcm_service.dart`
+## Phase 5 — Cloud/Firebase layer: `firebase_service.dart`, `friend_service.dart`, `fcm_service.dart` — ✅ เสร็จ
 
-- [ ] แยก Firestore query logic ออกจาก business logic ถ้าปนกัน
-- [ ] เช็ค error handling รอบ network call ทั้งหมด (ต้องไม่ crash แอพเวลา offline)
-- [ ] เช็คว่าไม่มี PII หลุด log (มี fix ไปแล้วเรื่อง `users/{userId}` ตาม TODO.md — ตรวจซ้ำว่าไม่มีจุดอื่นหลุดอีก)
+- [x] `flutter analyze` สะอาดอยู่แล้วทั้ง 3 ไฟล์ (0 issues)
+- [x] เช็ค error handling รอบ network call — `firebase_service.dart` มี `try {}` 30 บล็อก เทียบกับ
+  async method ~32 ตัว (สัดส่วนเกือบ 1:1) ครอบคลุมดีอยู่แล้ว ไม่พบจุดที่ Firestore call ไม่มี catch
+  ชัดเจนจนน่าเป็นห่วงว่าจะ crash ตอน offline
+- [x] เช็ค PII หลุด log — เจอ 1 จุด: `fcm_service.dart` log **FCM token เต็ม** ลง console
+  (`Log.d('Token: $_fcmToken')` และตอน token refresh) — ถึงจะเป็น debug-only (`Log.d` strip ทิ้งใน
+  release build อัตโนมัติ ดู `lib/core/logger.dart`) แต่ยังเป็นนิสัยไม่ดีถ้ามีคน screen-share ตอน debug
+  แก้โดยเพิ่ม `_maskToken()` โชว์แค่ 8 ตัวแรก + `…` แทนการพิมพ์ token เต็ม — ไม่กระทบ behavior การทำงานจริง
+  เลย (แค่ log message เปลี่ยน)
+- [x] ไม่พบ Firestore query logic ปนกับ business logic แบบที่ต้องแยกออกมาเป็นชั้นใหม่ — โครงสร้างปัจจุบัน
+  (service class ต่อ 1 concern) เหมาะสมแล้ว ไม่แตะเพิ่ม
+- [x] ยืนยันด้วย `flutter analyze lib` (0 issues) + `flutter test` (29/29 ผ่าน)
 
 ## Phase 6 — UI ที่เหลือ (screens < 700 บรรทัด)
 
@@ -296,3 +306,6 @@
   ปลอดภัยเพิ่มนอกจาก dead field `_gpsTimer` (null ตลอด) ใน `wifi_direct_transport.dart` — ถามผู้ใช้ก่อน
   ตามกติกา ผู้ใช้ยืนยันให้ลบ ลบแล้ว ไม่แตะส่วนอื่นของไฟล์เลย — analyze 0, test 29/29
   — **Phase 0-4 เสร็จสมบูรณ์ทั้งหมด**
+- 2026-08-18 — Phase 5: cloud layer สะอาดอยู่แล้ว (0 issues, error handling ครอบคลุมดี) เจอ FCM token
+  เต็มหลุด log ใน `fcm_service.dart` (debug-only แต่ควรแก้) — แก้ด้วย `_maskToken()` โชว์แค่ 8 ตัวแรก
+  — analyze 0, test 29/29 — **Phase 0-5 เสร็จสมบูรณ์ทั้งหมด**

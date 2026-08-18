@@ -20,6 +20,10 @@ class FCMService extends ChangeNotifier {
   String? _fcmToken;
   String? get fcmToken => _fcmToken;
 
+  /// ตัดโชว์แค่ 8 ตัวแรกใน log กัน token เต็มหลุดไป debug console/logcat
+  static String _maskToken(String? token) =>
+      token == null ? 'null' : '${token.substring(0, token.length.clamp(0, 8))}…';
+
   /// เริ่มต้น FCM
   Future<void> initialize() async {
     try {
@@ -36,12 +40,12 @@ class FCMService extends ChangeNotifier {
       if (settings.authorizationStatus == AuthorizationStatus.authorized) {
         // รับ FCM token
         _fcmToken = await _messaging.getToken();
-        Log.d('🔔 [FCM] Token: $_fcmToken');
+        Log.d('🔔 [FCM] Token: ${_maskToken(_fcmToken)}');
 
         // ฟังการเปลี่ยนแปลง token
         _messaging.onTokenRefresh.listen((newToken) {
           _fcmToken = newToken;
-          Log.d('🔔 [FCM] Token refreshed: $newToken');
+          Log.d('🔔 [FCM] Token refreshed: ${_maskToken(newToken)}');
           _updateTokenInFirestore(newToken);
         });
 
