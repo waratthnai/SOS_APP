@@ -21,7 +21,7 @@ class _SosOrbState extends State<SosOrb> with SingleTickerProviderStateMixin {
   double _holdProgress = 0.0;
   bool _isHolding = false;
   bool _isEmergencyActive = false;
-  ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? _warningSnackBar;
+  ScaffoldMessengerState? _holdMessenger;
 
   @override
   void initState() {
@@ -50,7 +50,9 @@ class _SosOrbState extends State<SosOrb> with SingleTickerProviderStateMixin {
         appState.broadcastSOSStatus(isActive: false);
       }
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        final messenger = ScaffoldMessenger.of(context);
+        messenger.clearSnackBars();
+        messenger.showSnackBar(
           const SnackBar(content: Text('ปิดการขอความช่วยเหลือ'), duration: Duration(seconds: 2)),
         );
       }
@@ -97,7 +99,9 @@ class _SosOrbState extends State<SosOrb> with SingleTickerProviderStateMixin {
     }
 
     if (context.mounted && !emergency) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      final messenger = ScaffoldMessenger.of(context);
+      messenger.clearSnackBars();
+      messenger.showSnackBar(
         const SnackBar(content: Text('ส่งคำขอความช่วยเหลือแล้ว'), duration: Duration(seconds: 2)),
       );
     }
@@ -108,7 +112,10 @@ class _SosOrbState extends State<SosOrb> with SingleTickerProviderStateMixin {
     _isHolding = true;
     _holdProgress = 0.0;
 
-    _warningSnackBar = ScaffoldMessenger.of(context).showSnackBar(
+    final messenger = ScaffoldMessenger.of(context);
+    _holdMessenger = messenger;
+    messenger.clearSnackBars();
+    messenger.showSnackBar(
       SnackBar(
         content: const Row(
           children: [
@@ -143,8 +150,8 @@ class _SosOrbState extends State<SosOrb> with SingleTickerProviderStateMixin {
         timer.cancel();
         _isHolding = false;
         setState(() => _holdProgress = 0.0);
-        _warningSnackBar?.close();
-        _warningSnackBar = null;
+        _holdMessenger?.removeCurrentSnackBar();
+        _holdMessenger = null;
         _handleSOSTap(context, emergency: true);
       }
     });
@@ -154,9 +161,9 @@ class _SosOrbState extends State<SosOrb> with SingleTickerProviderStateMixin {
     if (!_isHolding) return;
     _isHolding = false;
     _holdTimer?.cancel();
-    _warningSnackBar?.close();
-    _warningSnackBar = null;
     if (mounted) setState(() => _holdProgress = 0.0);
+    _holdMessenger?.removeCurrentSnackBar();
+    _holdMessenger = null;
   }
 
   Widget _statusBadge(bool isSOSActive) {

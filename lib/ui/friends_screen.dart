@@ -55,7 +55,6 @@ class _FriendsScreenState extends State<FriendsScreen>
     final cs = Theme.of(context).colorScheme;
 
     return Scaffold(
-      backgroundColor: cs.surface,
       appBar: AppBar(
         title: const Text(
           'เพื่อน',
@@ -148,6 +147,7 @@ class _FriendsScreenState extends State<FriendsScreen>
       ),
       body: TabBarView(
         controller: _tabController,
+        physics: const NeverScrollableScrollPhysics(),
         children: [
           RefreshIndicator(onRefresh: _refresh, child: _AllFriendsTab()),
           RefreshIndicator(onRefresh: _refresh, child: _OnlineFriendsTab()),
@@ -386,7 +386,7 @@ class _FriendTile extends StatelessWidget {
                     width: 18,
                     height: 18,
                     decoration: BoxDecoration(
-                      color: Colors.blue,
+                      color: const Color.fromARGB(255, 21, 39, 54),
                       border: Border.all(color: Colors.white, width: 2),
                       borderRadius: BorderRadius.circular(9),
                     ),

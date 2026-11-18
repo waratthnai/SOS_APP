@@ -36,24 +36,11 @@ class _RootNavState extends State<RootNav> {
     setState(() => _index = i);
   }
 
-  void _onHorizontalDrag(DragUpdateDetails details) {
-    if (details.primaryDelta != null && details.primaryDelta!.abs() > 10) {
-      if (details.primaryDelta! < 0 && _index < _pages.length - 1) {
-        setState(() => _index += 1);
-      } else if (details.primaryDelta! > 0 && _index > 0) {
-        setState(() => _index -= 1);
-      }
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Scaffold(
-      body: GestureDetector(
-        onHorizontalDragUpdate: _onHorizontalDrag,
-        child: _pages[_index],
-      ),
+      body: _pages[_index],
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           color: cs.surface,

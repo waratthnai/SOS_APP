@@ -47,7 +47,15 @@ class NearbyTransport implements Transport {
   // ID สุ่มต่อ session สำหรับ tiebreak เมื่อชื่ออุปกรณ์ตรงกัน
   final String _instanceId = DateTime.now().microsecondsSinceEpoch.toString();
 
+  // ⚠️ เก็บทุกชื่อที่เครื่องนี้เคยประกาศตัวเอง (ทั้งก่อน/หลัง login, ทุกครั้งที่ rename)
+  // ใช้กรอง self-echo ใน onEndpointFound — บางอุปกรณ์ (เช่น Samsung บางรุ่น) ส่ง
+  // advertisement ของตัวเองกลับเข้ามาใน scan result ได้จริง แม้ Nearby API ปกติควรกรองให้
+  // (เคยลบ filter ด้วยชื่อออกเพราะกลัวชื่อซ้ำระหว่าง 2 เครื่องจริงกรองผิด แต่ self-echo
+  // ที่ยืนยันแล้วจากอุปกรณ์จริงรุนแรงกว่า edge case ชื่อชนกัน — ยอมรับความเสี่ยงนี้แทน)
+  final Set<String> _myKnownNames = {};
+
   NearbyTransport({required this.deviceName}) {
+    _myKnownNames.add(deviceName);
     _startPeriodicCleanup();
   }
 
@@ -101,6 +109,7 @@ class NearbyTransport implements Transport {
   // เพิ่ม method สำหรับอัปเดตชื่อเครื่อง
   void updateDeviceName(String newName) {
     deviceName = newName;
+    _myKnownNames.add(newName);
     // หาก sedang advertising, ต้อง restart เพื่อใช้ชื่อใหม่
     if (_isAdvertising) {
       _restartAdvertising();
@@ -480,9 +489,15 @@ class NearbyTransport implements Transport {
       onEndpointFound: (id, name, serviceId) {
         Log.d('🔍 Found endpoint: id=$id, name="$name", serviceId=$serviceId');
         Log.d('   Comparing with my name: "$deviceName"');
-        
-        // Nearby Connections API ไม่ส่งเครื่องตัวเองกลับมาใน onEndpointFound
-        // ไม่ต้องกรองด้วยชื่อ (ชื่อซ้ำกันระหว่างเครื่องทำให้กรองผิด)
+
+        // ⚠️ self-echo guard: บางอุปกรณ์ส่ง advertisement ของตัวเองกลับเข้า scan
+        // result ได้จริง (ยืนยันแล้วบนอุปกรณ์จริง — เห็นทั้งชื่อเก่า/ใหม่ของตัวเองหลัง rename)
+        // แม้ Nearby API ปกติควรกรองให้อยู่แล้ว
+        if (_myKnownNames.contains(name)) {
+          Log.d('🔇 [SKIP] Self-echo detected: "$name" ตรงกับชื่อที่เครื่องนี้เคยประกาศตัวเอง');
+          return;
+        }
+
         Log.d('✅ Found endpoint: processing $id ($name)');
         
         // ⚡ ถ้าเคย lost ไป → ลบออกจาก lost list (กลับมาแล้ว!)
